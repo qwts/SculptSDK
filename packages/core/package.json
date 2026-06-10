@@ -1,0 +1,27 @@
+{
+  "name": "@sculptsdk/core",
+  "version": "0.1.0",
+  "description": "SculptSDK core: typed semantic browser control for agentic systems",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./kernel": {
+      "types": "./dist/kernel/index.d.ts",
+      "default": "./dist/kernel/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build:kernel": "node scripts/build-kernel.mjs",
+    "build": "node scripts/build-kernel.mjs && tsc -p tsconfig.json",
+    "typecheck": "node scripts/build-kernel.mjs && tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "typescript": "^5.6.3"
+  }
+}
