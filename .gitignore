@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+packages/core/src/generated/
+packages/fixtures/react-app/dist/
+packages/fixtures/vue-app/dist/
+.DS_Store

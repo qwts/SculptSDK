@@ -1,0 +1,28 @@
+{
+  "name": "@sculptsdk/adapter-playwright",
+  "version": "0.1.0",
+  "description": "SculptSDK runtime adapter for Playwright pages",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sculptsdk/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.1",
+    "typescript": "^5.6.3"
+  }
+}

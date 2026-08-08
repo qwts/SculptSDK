@@ -1,0 +1,25 @@
+{
+  "name": "@sculptsdk/adapter-testing",
+  "version": "0.1.0",
+  "description": "SculptSDK test-harness runtime adapter backed by happy-dom",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@sculptsdk/core": "workspace:*",
+    "happy-dom": "^15.11.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
