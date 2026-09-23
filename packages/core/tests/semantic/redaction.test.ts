@@ -90,6 +90,20 @@ describe("Redactor", () => {
     expect(redactor.text("aria-label mentions ada@example.com here")).toBe("aria-label mentions [redacted] here");
   });
 
+  it("fully redacts a longer secret even when a shorter substring of it was learned first", () => {
+    // Regression: replacing in insertion order, a shorter learned value
+    // that's a substring of a longer one (learned second) would break the
+    // longer value's exact match and leak its remainder. Longest-first
+    // replacement avoids that regardless of learn() order.
+    const redactor = new Redactor();
+    redactor.learn("Ada");
+    redactor.learn("Ada Lovelace");
+    const result = redactor.text("Contact: Ada Lovelace");
+    expect(result).not.toContain("Lovelace");
+    expect(result).not.toContain("Ada");
+    expect(result).toBe("Contact: [redacted]");
+  });
+
   it("scrubs the same learned value from every distinct sink text", () => {
     const redactor = new Redactor();
     redactor.learn("Ada Lovelace");
