@@ -123,6 +123,23 @@ export interface DecisionProvider {
   decide(request: DecisionRequest): Promise<RawDecisionResponse>;
 }
 
+/**
+ * How a provider (or the runtime wrapping one) reports that no answer is
+ * coming: a transport error, an already-aborted signal, a deadline already
+ * passed, or — for `NullProvider`/`RecordedProvider` — simply that this
+ * provider never answers that request. Always carries a machine-readable
+ * `reasonCode`; a provider must never throw an untyped error instead.
+ */
+export class ProviderUnavailableError extends Error {
+  readonly reasonCode: string;
+
+  constructor(reasonCode: string, message?: string) {
+    super(message ?? reasonCode);
+    this.name = "ProviderUnavailableError";
+    this.reasonCode = reasonCode;
+  }
+}
+
 export interface ModelSupportCheck {
   supported: boolean;
   reason?: { code: "unsupported_model_or_calibration"; detail: string };
