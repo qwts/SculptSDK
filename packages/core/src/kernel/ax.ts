@@ -109,11 +109,23 @@ export function isAriaHidden(el: Element): boolean {
   return false;
 }
 
+/**
+ * Structural shadow-root test: `instanceof ShadowRoot` depends on a global
+ * `ShadowRoot` constructor that only exists inside a real DOM scope (e.g. not
+ * in a plain Node.js process driving a `happy-dom` window by reference), so
+ * this checks node type and shape instead. Returns the shadow host element
+ * when `root` is a shadow root, `null` otherwise (including for a plain,
+ * non-shadow `DocumentFragment`, which shares the same `nodeType`).
+ */
+export function shadowHostOf(root: Node | null | undefined): Element | null {
+  if (!root || root.nodeType !== 11 /* Node.DOCUMENT_FRAGMENT_NODE */) return null;
+  const host = (root as unknown as { host?: unknown }).host as Element | undefined;
+  return host && host.nodeType === 1 /* Node.ELEMENT_NODE */ ? host : null;
+}
+
 /** Crosses open shadow boundaries upward. */
 function hostOf(el: Element): Element | null {
-  const root = el.getRootNode?.();
-  if (root && root instanceof ShadowRoot) return root.host;
-  return null;
+  return shadowHostOf(el.getRootNode?.());
 }
 
 export function isDisabled(el: Element): boolean {

@@ -72,6 +72,10 @@ export interface KernelState {
   pendingNavigation: boolean;
   networkObservation: boolean;
   activeObservers: number;
+  /** Identifies this in-page kernel injection; a hard reload gets a new one. */
+  documentId: string;
+  /** Increments on every observed route/navigation change (§15 freshness evidence). */
+  navigationEpoch: number;
 }
 
 export interface KernelEvent {
@@ -97,6 +101,11 @@ export function currentRoute(win: AnyWindow): RouteState {
   return { url: loc.href, path: loc.pathname, hash: loc.hash };
 }
 
+/** No cryptographic requirement — just unique enough to tell two injections apart. */
+function generateDocumentId(): string {
+  return `doc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function createContext(win: AnyWindow, options: KernelOptions = {}): KernelContext {
   const startedAt = Date.now();
   return {
@@ -115,7 +124,9 @@ export function createContext(win: AnyWindow, options: KernelOptions = {}): Kern
       routeChangedAt: 0,
       pendingNavigation: false,
       networkObservation: options.networkObservation ?? false,
-      activeObservers: 0
+      activeObservers: 0,
+      documentId: generateDocumentId(),
+      navigationEpoch: 0
     },
     emit: options.onEvent ?? (() => {})
   };

@@ -40,3 +40,6 @@ export { ModelContext, toModelSummary } from "./orchestration/model-context.js";
 export { Sculpt } from "./sculpt.js";
 export type { SculptAttachOptions } from "./sculpt.js";
 export { KERNEL_SOURCE } from "./generated/kernel-source.js";
+/** @experimental Semantic Resolution Layer (m0 foundations). Not wired into
+ * `Sculpt.attach` yet — see #14. */
+export * from "./semantic/index.js";

@@ -62,6 +62,10 @@ export interface SculptControlSettings {
   sourceMapConsumption: "disabled" | "enabled";
   actionLogging: "disabled" | "metadata" | "full";
   rawJavaScript: "disabled" | "escape-hatch" | "enabled";
+  /** @experimental Semantic Resolution Layer (m0 foundations). Off by
+   * default (ADR-0004): identical results and side effects to today, no
+   * provider calls, no provider initialization. */
+  semanticResolution: "disabled" | "enabled";
 }
 
 export type ExecutionWorld =

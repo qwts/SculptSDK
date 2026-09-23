@@ -1,0 +1,11 @@
+{
+  "name": "@sculptsdk/fixtures",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static HTML fixtures the Playwright e2e suite drives SculptSDK against",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "build": "node -e \"console.log('static fixtures: nothing to build (no react-app/vue-app yet)')\""
+  }
+}

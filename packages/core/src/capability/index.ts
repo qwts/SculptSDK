@@ -15,7 +15,8 @@ export const DEFAULT_SETTINGS: SculptControlSettings = {
   storageInspection: "operator-controlled",
   sourceMapConsumption: "disabled",
   actionLogging: "metadata",
-  rawJavaScript: "escape-hatch"
+  rawJavaScript: "escape-hatch",
+  semanticResolution: "disabled"
 };
 
 export function resolveSettings(authority?: Partial<SculptControlSettings>): SculptControlSettings {

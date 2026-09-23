@@ -9,6 +9,7 @@ import {
   isDisabled,
   isEditable,
   isFocusable,
+  shadowHostOf,
   visibleText
 } from "./ax.js";
 import { getBox, isVisibleQuick } from "./layout.js";
@@ -385,6 +386,6 @@ export function describeNode(ctx: KernelContext, el: Element): DomNode {
     focusable: isFocusable(el),
     editable: isEditable(el),
     frameId: ownerDoc === ctx.doc ? "main" : "subframe",
-    inShadowRoot: el.getRootNode?.() instanceof ShadowRoot
+    inShadowRoot: shadowHostOf(el.getRootNode?.()) !== null
   };
 }

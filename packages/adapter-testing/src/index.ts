@@ -14,6 +14,20 @@ import {
 } from "@sculptsdk/core";
 
 export { adapterConformanceTests, type ConformanceTest } from "./conformance.js";
+export {
+  providerConformanceTests,
+  CONFORMANCE_QUESTION,
+  CONFORMANCE_REQUEST_META,
+  type ProviderConformanceTest
+} from "./provider-conformance.js";
+export {
+  RecordedProvider,
+  RECORDING_FORMAT_VERSION,
+  isDecisionRecordingFile,
+  type DecisionRecordingEntry,
+  type DecisionRecordingFile,
+  type DecisionRecordingRequestMeta
+} from "./recorded-provider.js";
 
 export interface TestHarnessOptions {
   html?: string;

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Duplicate Save</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      [role="dialog"] {
+        border: 1px solid #333;
+        padding: 16px;
+        margin-top: 24px;
+        max-width: 320px;
+      }
+      .status { margin-top: 12px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>Edit document</h1>
+    <p>Page-level save button, and a dialog with its own save button visible at the same time.</p>
+
+    <button id="page-save" type="button">Save</button>
+    <div class="status" id="page-status"></div>
+
+    <div role="dialog" aria-label="Confirm changes">
+      <p>Unsaved changes</p>
+      <button id="dialog-save" type="button">Save</button>
+      <div class="status" id="dialog-status"></div>
+    </div>
+
+    <script>
+      document.getElementById("page-save").addEventListener("click", () => {
+        document.getElementById("page-status").textContent = "page saved";
+      });
+      document.getElementById("dialog-save").addEventListener("click", () => {
+        document.getElementById("dialog-status").textContent = "dialog saved";
+      });
+    </script>
+  </body>
+</html>
