@@ -113,7 +113,13 @@ export class Redactor {
   text(input: string | undefined): string | undefined {
     if (input === undefined) return undefined;
     let out = input;
-    for (const value of this.learned) {
+    // Longest first: if a shorter learned value is also a substring of a
+    // longer one (e.g. "Ada" learned alongside "Ada Lovelace") and gets
+    // replaced first, the longer value's exact match breaks and its
+    // remainder leaks through unredacted. Replacing longest-first means a
+    // later, shorter pass only ever touches what a longer one didn't cover.
+    const byLengthDescending = [...this.learned].sort((a, b) => b.length - a.length);
+    for (const value of byLengthDescending) {
       if (out.includes(value)) out = out.split(value).join(REDACTED_PLACEHOLDER);
     }
     for (const rule of this.operatorRules) out = rule(out);
