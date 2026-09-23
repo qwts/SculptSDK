@@ -366,10 +366,12 @@ export class UIRoot {
     missShortlist?: QueryCandidate[];
     missRecord?: SemanticDecisionRecord;
   }> {
-    const { candidates, evidence } = await this.env.kernel.call<{ candidates: QueryCandidate[]; evidence: KernelEvidence }>(
-      "query",
-      { query: serializeQuery(query), limit: 5 }
-    );
+    const TIE_QUERY_LIMIT = 5;
+    const { candidates, total, evidence } = await this.env.kernel.call<{
+      candidates: QueryCandidate[];
+      total: number;
+      evidence: KernelEvidence;
+    }>("query", { query: serializeQuery(query), limit: TIE_QUERY_LIMIT });
     const min = query.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
     const best = candidates[0];
     if (!best || best.confidence < min) {
@@ -388,7 +390,18 @@ export class UIRoot {
     // A genuine tie: every candidate here already passed every mandatory
     // matcher deterministically (I1/I3) — DP-1 only helps pick among them,
     // it never widens the admitted set (#23).
-    const tied = candidates.filter((c) => c.confidence >= min && best.score - c.score < AMBIGUITY_MARGIN);
+    let tied = candidates.filter((c) => c.confidence >= min && best.score - c.score < AMBIGUITY_MARGIN);
+    // The tied set filled the query's own limit while more candidates exist
+    // beyond it (`total`): a candidate we never saw could also be tied, so
+    // this set isn't provably complete — re-query wide enough to know for
+    // sure rather than silently disambiguating among a truncated subset.
+    if (tied.length === candidates.length && total > candidates.length) {
+      const widened = await this.env.kernel.call<{ candidates: QueryCandidate[] }>("query", {
+        query: serializeQuery(query),
+        limit: total
+      });
+      tied = widened.candidates.filter((c) => c.confidence >= min && best.score - c.score < AMBIGUITY_MARGIN);
+    }
     let dp1Record: SemanticDecisionRecord | undefined;
     if (this.env.semantic.isPointEnabled(DP1_POINT)) {
       const disambiguated = await this.resolveViaDp1(query, tied, evidence);
@@ -425,8 +438,11 @@ export class UIRoot {
       tied,
       mode: "tie",
       intent: describeQueryIntent(query),
-      routePath: route.path + route.hash,
-      documentEvidence: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch }
+      // The hash fragment can carry OAuth tokens and other sensitive state
+      // (page state, never a form value) — never send it to a provider.
+      routePath: route.path,
+      documentEvidence: evidence,
+      checkFreshness: () => this.env.foundation.observers.evidence()
     });
     const accepted = acceptedTargetId ? tied.find((c) => c.summary.targetId === acceptedTargetId) : undefined;
     return { element: accepted ? instantiate(this.env, accepted, query.kind) : null, record };
@@ -453,8 +469,11 @@ export class UIRoot {
       tied: shortlist,
       mode: "miss",
       intent: describeQueryIntent(query),
-      routePath: route.path + route.hash,
-      documentEvidence: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch }
+      // The hash fragment can carry OAuth tokens and other sensitive state
+      // (page state, never a form value) — never send it to a provider.
+      routePath: route.path,
+      documentEvidence: evidence,
+      checkFreshness: () => this.env.foundation.observers.evidence()
     });
     const accepted = acceptedTargetId ? shortlist.find((c) => c.summary.targetId === acceptedTargetId) : undefined;
     return { element: accepted ? instantiate(this.env, accepted, query.kind) : null, shortlist, record };
