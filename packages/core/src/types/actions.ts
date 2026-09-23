@@ -139,6 +139,10 @@ export interface FormFillResult {
   unmapped: string[];
   ambiguous: { key: string; candidates: string[] }[];
   validationErrors: FormValidationError[];
+  /** Present when `fill({ submit: true })` filled successfully but the
+   * follow-up submit failed (e.g. a #22 guard mismatch after a fill-induced
+   * rerender) — `ok` is `false` in that case even though every field filled. */
+  submitError?: SculptErrorShape;
 }
 
 /** Wire-form postconditions for transport into the kernel. */

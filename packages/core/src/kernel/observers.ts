@@ -1,5 +1,5 @@
 import type { StabilityOptions, StableStateReport } from "../types/actions.js";
-import type { KernelContext } from "./context.js";
+import type { AnyWindow, KernelContext } from "./context.js";
 import { currentRoute } from "./context.js";
 
 /**
@@ -7,6 +7,18 @@ import { currentRoute } from "./context.js";
  * activity. SPAs update without reloads; these signals feed waitForStableState
  * so actions never rely on blind sleeps.
  */
+
+/** `history.pushState`/`replaceState` are patched at most once per window
+ * (see below) — but a page can receive a newer kernel injection over an
+ * older one without a reload (e.g. two adapter instances, or a version
+ * bump between attaches). The patched functions call through this
+ * window-level indirection rather than closing over one `onRouteChange`,
+ * so every `installObservers()` call — including a later kernel replacing
+ * an earlier one — takes over live route notification immediately, and a
+ * navigation is never silently tracked only by an abandoned old context. */
+type RouteTrackingWindow = AnyWindow & {
+  __sculptRouteChange__?: (source: string) => void;
+};
 
 export function installObservers(ctx: KernelContext): () => void {
   const { win, doc, state } = ctx;
@@ -42,17 +54,25 @@ export function installObservers(ctx: KernelContext): () => void {
     }
   };
 
+  // Reassigned on every installObservers() call — this is what lets a later
+  // kernel injection take over route tracking from an earlier one.
+  const routeWin = win as RouteTrackingWindow;
+  routeWin.__sculptRouteChange__ = onRouteChange;
+  teardowns.push(() => {
+    if (routeWin.__sculptRouteChange__ === onRouteChange) delete routeWin.__sculptRouteChange__;
+  });
+
   const history = win.history as History & { __sculptPatched?: boolean };
   if (history && typeof history.pushState === "function" && !history.__sculptPatched) {
     const originalPush = history.pushState.bind(history);
     const originalReplace = history.replaceState.bind(history);
     history.pushState = function (data: unknown, unused: string, url?: string | URL | null) {
       originalPush(data, unused, url);
-      onRouteChange("pushState");
+      routeWin.__sculptRouteChange__?.("pushState");
     };
     history.replaceState = function (data: unknown, unused: string, url?: string | URL | null) {
       originalReplace(data, unused, url);
-      onRouteChange("replaceState");
+      routeWin.__sculptRouteChange__?.("replaceState");
     };
     history.__sculptPatched = true;
   }
