@@ -71,6 +71,15 @@ describe("redactRoute", () => {
   it("keeps only the path, stripping anything the caller passes beyond it", () => {
     expect(redactRoute({ path: "/checkout/step-2" })).toBe("/checkout/step-2");
   });
+
+  it("strips a query string or fragment even if a caller's 'path' still has one", () => {
+    // Regression: this function's contract is "path only" — it must enforce
+    // that itself rather than trust every caller to have already stripped
+    // query strings and fragments.
+    expect(redactRoute({ path: "/search?q=secret-token" })).toBe("/search");
+    expect(redactRoute({ path: "/docs#section-2" })).toBe("/docs");
+    expect(redactRoute({ path: "/search?q=secret&sort=asc#top" })).toBe("/search");
+  });
 });
 
 describe("Redactor", () => {
@@ -158,6 +167,23 @@ describe("buildCandidateSummaryDTO", () => {
     const dto = buildCandidateSummaryDTO({ targetId: "t1", visibleText: longText }, redactor, { maxTextLength: 10 });
     expect(dto.visibleText?.length).toBeLessThanOrEqual(11); // 10 chars + ellipsis
   });
+
+  it("redacts a learned value even when truncation would otherwise cut it in half", () => {
+    // Regression: redacting after truncating can leave an unredacted
+    // fragment of a long secret in the DTO (the truncated prefix no longer
+    // matches the full learned string).
+    const redactor = new Redactor();
+    const longSecret = `secret-token-${"x".repeat(200)}`;
+    redactor.learn(longSecret);
+    const dto = buildCandidateSummaryDTO(
+      { targetId: "t1", accessibleName: `Field value: ${longSecret}` },
+      redactor,
+      { maxTextLength: 30 }
+    );
+    expect(dto.accessibleName).not.toContain("secret-token");
+    expect(dto.accessibleName).not.toContain("x".repeat(10));
+    expect(dto.accessibleName).toContain("[redacted]");
+  });
 });
 
 describe("sanitizeError", () => {
@@ -175,5 +201,25 @@ describe("sanitizeError", () => {
     const sanitized = sanitizeError("a bare string throw", redactor);
     expect(sanitized.code).toBe("UNKNOWN");
     expect(typeof sanitized.message).toBe("string");
+  });
+
+  it("never throws on a value JSON.stringify itself would throw on", () => {
+    // Regression: a malformed provider failure (circular object, BigInt, a
+    // throwing toJSON/toString) must still produce a sanitized result, not
+    // an unhandled rejection out of the runtime's own error handling.
+    const redactor = new Redactor();
+
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => sanitizeError(circular, redactor)).not.toThrow();
+    expect(typeof sanitizeError(circular, redactor).message).toBe("string");
+
+    expect(() => sanitizeError(BigInt(9007199254740993), redactor)).not.toThrow();
+
+    const throwsOnStringify = { toJSON: () => { throw new Error("boom"); } };
+    expect(() => sanitizeError(throwsOnStringify, redactor)).not.toThrow();
+
+    const throwsOnToString = { toString: () => { throw new Error("boom"); } };
+    expect(() => sanitizeError(throwsOnToString, redactor)).not.toThrow();
   });
 });

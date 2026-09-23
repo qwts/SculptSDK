@@ -76,9 +76,12 @@ export function allowlistAttributes(attributes: Record<string, string> | undefin
   return out;
 }
 
-/** Route path only — query string and fragment are stripped (§6). */
+/** Route path only — query string and fragment are stripped (§6), even if
+ * a caller passes a `path` that still has them (defense in depth: this
+ * function's contract is "path only", so it enforces that itself rather
+ * than trusting every caller to have already stripped them). */
 export function redactRoute(route: Pick<RouteState, "path">): string {
-  return route.path;
+  return route.path.split("?")[0]!.split("#")[0]!;
 }
 
 export type RedactionRule = (text: string) => string;
@@ -161,21 +164,42 @@ export function buildCandidateSummaryDTO(
   options: { maxTextLength?: number } = {}
 ): CandidateSummaryDTO {
   const maxLength = options.maxTextLength ?? 120;
+  // Redact the *complete* string first, then truncate: truncating first
+  // could cut a learned value in half, leaving an unredacted fragment of it
+  // (e.g. a long token) in the outbound DTO.
   return {
     candidateId: candidate.targetId,
     kind: candidate.kind,
     role: candidate.role,
-    accessibleName: redactor.text(truncate(candidate.accessibleName, maxLength)),
-    visibleText: redactor.text(truncate(candidate.visibleText, maxLength)),
+    accessibleName: truncate(redactor.text(candidate.accessibleName), maxLength),
+    visibleText: truncate(redactor.text(candidate.visibleText), maxLength),
     attributes: redactor.attributes(candidate.attributes)
   };
 }
 
+/** Best-effort stringification that can never itself throw — a circular
+ * object, a BigInt, or a throwing `toJSON`/`toString` must never turn a
+ * sanitization step into an unhandled rejection. */
+function safeStringify(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (json !== undefined) return json;
+  } catch {
+    // fall through to String()
+  }
+  try {
+    return String(value);
+  } catch {
+    return "[unserializable error value]";
+  }
+}
+
 /** Sanitizes an arbitrary thrown value into a safe-to-store error shape —
- * never trusts a provider's or a bug's raw message not to echo a learned value. */
+ * never trusts a provider's or a bug's raw message not to echo a learned
+ * value, and never throws itself (a malformed provider failure must still
+ * reach the runtime's typed degraded/unsatisfied result, not reject it). */
 export function sanitizeError(error: unknown, redactor: Redactor): { code: string; message: string } {
-  const raw =
-    error instanceof Error ? error.message : typeof error === "string" ? error : JSON.stringify(error) ?? String(error);
+  const raw = error instanceof Error ? error.message : typeof error === "string" ? error : safeStringify(error);
   return { code: "UNKNOWN", message: redactor.text(raw) ?? "" };
 }
 
