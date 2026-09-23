@@ -5,7 +5,8 @@ import {
   ConsumedGrantRegistry,
   CLICK_MATERIAL_DIGEST,
   RISK_FLOOR_POLICY_VERSION,
-  type ConfirmationGrant
+  type ConfirmationGrant,
+  type FormMaterialSnapshot
 } from "@sculptsdk/core";
 
 /**
@@ -138,28 +139,67 @@ describe("verifyConfirmationGrant: each of the acceptance criteria's invalid cas
   });
 });
 
+function materialSnapshot(
+  fields: { name: string; id?: string; type?: string; value?: string }[],
+  overrides: { action?: string; method?: string } = {}
+): FormMaterialSnapshot {
+  return {
+    fields: fields.map((f) => ({ id: "", type: "text", ...f })),
+    action: overrides.action ?? "/submit",
+    method: overrides.method ?? "post"
+  };
+}
+
 describe("computeFormValuesDigest", () => {
   it("is order-independent — field order doesn't change the digest", () => {
-    const a = computeFormValuesDigest([
-      { targetId: "t1", label: "Name", kind: "input", required: true, value: "Alice" },
-      { targetId: "t2", label: "Email", kind: "input", required: true, value: "alice@example.com" }
-    ]);
-    const b = computeFormValuesDigest([
-      { targetId: "t9", label: "Email", kind: "input", required: true, value: "alice@example.com" },
-      { targetId: "t8", label: "Name", kind: "input", required: true, value: "Alice" }
-    ]);
-    expect(a).toBe(b);
-  });
-
-  it("ignores each field's own targetId — a rerender assigning new ids doesn't change the digest", () => {
-    const a = computeFormValuesDigest([{ targetId: "t1", label: "Name", kind: "input", required: true, value: "Alice" }]);
-    const b = computeFormValuesDigest([{ targetId: "t99", label: "Name", kind: "input", required: true, value: "Alice" }]);
+    const a = computeFormValuesDigest(
+      materialSnapshot([
+        { name: "name", value: "Alice" },
+        { name: "email", value: "alice@example.com" }
+      ])
+    );
+    const b = computeFormValuesDigest(
+      materialSnapshot([
+        { name: "email", value: "alice@example.com" },
+        { name: "name", value: "Alice" }
+      ])
+    );
     expect(a).toBe(b);
   });
 
   it("differs when a value actually changes", () => {
-    const a = computeFormValuesDigest([{ targetId: "t1", label: "Amount", kind: "input", required: true, value: "100" }]);
-    const b = computeFormValuesDigest([{ targetId: "t1", label: "Amount", kind: "input", required: true, value: "1000" }]);
+    const a = computeFormValuesDigest(materialSnapshot([{ name: "amount", value: "100" }]));
+    const b = computeFormValuesDigest(materialSnapshot([{ name: "amount", value: "1000" }]));
+    expect(a).not.toBe(b);
+  });
+
+  it("differs when a hidden field's value changes — the visible fields alone don't cover this", () => {
+    const a = computeFormValuesDigest(
+      materialSnapshot([
+        { name: "amount", value: "100" },
+        { name: "account-id", type: "hidden", value: "acct-1" }
+      ])
+    );
+    const b = computeFormValuesDigest(
+      materialSnapshot([
+        { name: "amount", value: "100" },
+        { name: "account-id", type: "hidden", value: "acct-2" }
+      ])
+    );
+    expect(a).not.toBe(b);
+  });
+
+  it("differs when the form's action changes — a retargeted submit is a different material state", () => {
+    const fields = [{ name: "amount", value: "100" }];
+    const a = computeFormValuesDigest(materialSnapshot(fields, { action: "/checkout/purchase" }));
+    const b = computeFormValuesDigest(materialSnapshot(fields, { action: "/checkout/purchase-as-gift-card" }));
+    expect(a).not.toBe(b);
+  });
+
+  it("differs when the form's method changes", () => {
+    const fields = [{ name: "amount", value: "100" }];
+    const a = computeFormValuesDigest(materialSnapshot(fields, { method: "post" }));
+    const b = computeFormValuesDigest(materialSnapshot(fields, { method: "get" }));
     expect(a).not.toBe(b);
   });
 
@@ -167,8 +207,8 @@ describe("computeFormValuesDigest", () => {
     // "1r" and "30" both hashed to the same 32-bit djb2 value (d60932c8) —
     // this is the exact case the review flagged as a forgeable material
     // digest for a security binding.
-    const a = computeFormValuesDigest([{ targetId: "t1", label: "Code", kind: "input", required: true, value: "1r" }]);
-    const b = computeFormValuesDigest([{ targetId: "t1", label: "Code", kind: "input", required: true, value: "30" }]);
+    const a = computeFormValuesDigest(materialSnapshot([{ name: "code", value: "1r" }]));
+    const b = computeFormValuesDigest(materialSnapshot([{ name: "code", value: "30" }]));
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
   });

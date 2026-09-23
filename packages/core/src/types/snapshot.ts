@@ -49,6 +49,33 @@ export interface FormSummary {
   fields: FormFieldSummary[];
 }
 
+/**
+ * One field's raw material state for the #27 confirmation-grant digest —
+ * deliberately a different shape from `FormFieldSummary`: it's keyed by
+ * `name`/`id` (hidden fields have no visible label to key by) and it
+ * includes every submittable control, hidden inputs included. Never used to
+ * address a field by meaning — that's `FormFieldSummary`'s job.
+ */
+export interface FormMaterialField {
+  name: string;
+  id: string;
+  type: string;
+  value?: string;
+}
+
+/**
+ * Everything a `submit` actually posts that a page could change after a
+ * human reviewed it: every submittable field (hidden included) plus the
+ * form's own `action`/`method` — a grant bound only to the visible,
+ * labelable fields (`FormFieldSummary`) never covers a hidden field or a
+ * retargeted form.
+ */
+export interface FormMaterialSnapshot {
+  fields: FormMaterialField[];
+  action: string;
+  method: string;
+}
+
 export interface DialogSummary {
   targetId: string;
   role: string;

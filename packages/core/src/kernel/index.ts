@@ -15,16 +15,16 @@ import {
   syntheticClick,
   typeText
 } from "./input.js";
-import { fillForm, submitForm, summarizeFields, collectValidationErrors } from "./forms.js";
+import { fillForm, submitForm, summarizeFields, materialSnapshot, collectValidationErrors } from "./forms.js";
 import { installNetworkObservation, installObservers, stabilityProbe, waitForStable } from "./observers.js";
 import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-// Bumped for §26: a new `riskSignals` op gives the deterministic risk floor
-// what it checks (accessible name, visible text, form action) in one call.
-// Additive.
-export const KERNEL_VERSION = "0.6.0";
+// Bumped for §27 (review hardening): a new `formMaterialSnapshot` op gives
+// the confirmation-grant digest hidden fields and the form's action/method,
+// none of which `formFields` ever exposed. Additive.
+export const KERNEL_VERSION = "0.7.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -211,6 +211,10 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
     formFill: (a: TargetArg & { values?: Record<string, unknown> }) => fillForm(ctx, el(a), a.values ?? {}),
     formSubmit: (a: TargetArg) => submitForm(ctx, el(a)),
     formValidationErrors: (a: TargetArg) => ({ errors: collectValidationErrors(ctx, el(a)) }),
+    // #27: what a submit actually posts — every field `formFields` covers
+    // plus hidden inputs plus the form's own action/method — for the
+    // confirmation-grant material digest, never for filling or display.
+    formMaterialSnapshot: (a: TargetArg) => materialSnapshot(ctx, el(a)),
 
     identity: (a: TargetArg) => computeIdentity(ctx, el(a)),
     rebind: (a: { identity: ElementIdentity }) => {

@@ -1,6 +1,6 @@
 import { normalizeText } from "../types/matchers.js";
 import type { FormFillResult, FormValidationError, FilledField } from "../types/actions.js";
-import type { FormFieldSummary } from "../types/snapshot.js";
+import type { FormFieldSummary, FormMaterialField, FormMaterialSnapshot } from "../types/snapshot.js";
 import type { UIKind } from "../types/kinds.js";
 import type { KernelContext } from "./context.js";
 import { getAccessibleName, visibleText } from "./ax.js";
@@ -173,6 +173,51 @@ export function summarizeFields(ctx: KernelContext, form: Element): FormFieldSum
       value: summarizeValue(el)
     };
   });
+}
+
+/** Every control `formControls` excludes because it isn't something a host
+ * fills by label — hidden inputs carry material state (an id, an amount, a
+ * recipient) all the same, so a #27 material digest built only from
+ * `summarizeFields` never notices one changing. `submit`/`button`/`reset`/
+ * `image` are excluded here too: they carry no state of their own, only the
+ * target already covered by `targetDigest`. */
+function hiddenMaterialControls(form: Element): Element[] {
+  const native = (form as HTMLFormElement).elements;
+  const source = native ? Array.from(native) : Array.from(form.querySelectorAll("input[type=hidden]"));
+  return source.filter((el) => {
+    if (el.tagName.toLowerCase() !== "input") return false;
+    return ((el as HTMLInputElement).getAttribute("type") ?? "text").toLowerCase() === "hidden";
+  });
+}
+
+function toMaterialField(el: Element): FormMaterialField {
+  const tag = el.tagName.toLowerCase();
+  return {
+    name: el.getAttribute("name") ?? "",
+    id: el.getAttribute("id") ?? "",
+    type: tag === "input" ? ((el as HTMLInputElement).getAttribute("type") ?? "text").toLowerCase() : tag,
+    value: summarizeValue(el)
+  };
+}
+
+/**
+ * Everything a `submit` actually posts (#27): every visible/fillable field
+ * plus the hidden ones `formControls` deliberately excludes, plus the
+ * form's own `action`/`method` — a page can change a hidden account id, a
+ * hidden amount, or retarget the form entirely without touching anything a
+ * human reviewer could see, and none of that would show up in
+ * `summarizeFields` alone. Keyed by `name`/`id`, not by label — a hidden
+ * field has no visible label to key by.
+ */
+export function materialSnapshot(ctx: KernelContext, form: Element): FormMaterialSnapshot {
+  const visible = formControls(form).map(toMaterialField);
+  const hidden = hiddenMaterialControls(form).map(toMaterialField);
+  const htmlForm = form as HTMLFormElement;
+  return {
+    fields: [...visible, ...hidden],
+    action: htmlForm.getAttribute("action") ?? "",
+    method: (htmlForm.getAttribute("method") ?? "get").toLowerCase()
+  };
 }
 
 /** Sync fingerprint for a password value — never the plaintext itself, but

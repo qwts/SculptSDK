@@ -4,7 +4,7 @@ import type {
   ActionResult,
   BrowserCapabilities,
   CheckResult,
-  FormFieldSummary,
+  FormMaterialSnapshot,
   InputMode,
   PostconditionExpectation,
   RecoveryStep,
@@ -214,10 +214,18 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
   let mode: InputMode | undefined;
   let value: unknown;
   let executed = false;
+  // A grant is verified and consumed at most once per `runAction` call, not
+  // once per attempt: a retryable precondition failure (e.g. the target
+  // isn't visible yet) re-enters this loop with the *same* grant, which
+  // `env.consumedGrants` would otherwise already show as consumed —
+  // reporting a spurious "reused" on a grant that's still doing its job for
+  // this very call. Once cleared, later attempts skip the gate entirely and
+  // reuse the guard/material check it already established.
+  let riskGateCleared = false;
+  let pendingSubmitRevalidation: { grantId: string; materialDigest: string } | undefined;
 
   for (let attempt = 0; attempt <= recovery.retryLimit; attempt++) {
     if (attempt > 0) recoverySteps.push({ step: "retry", ok: true, detail: `attempt ${attempt + 1}` });
-    let pendingSubmitRevalidation: { grantId: string; materialDigest: string } | undefined;
     try {
       const resolution = await env.foundation.identity.resolve(target);
       if (resolution.rebound) {
@@ -241,7 +249,7 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       // exact action/target/document/material state (#27) — either way the
       // thrown error is non-retryable (see CODE_TRAITS), so the loop below
       // breaks immediately rather than retrying past it.
-      if (env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
+      if (!riskGateCleared && env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
         const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
         const matched = checkRiskFloor(signals);
         if (matched) {
@@ -253,7 +261,7 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           const route = await env.foundation.observers.routeState();
           const materialDigest =
             actionType === "submit"
-              ? computeFormValuesDigest((await env.kernel.call<{ fields: FormFieldSummary[] }>("formFields", { target })).fields)
+              ? computeFormValuesDigest(await env.kernel.call<FormMaterialSnapshot>("formMaterialSnapshot", { target }))
               : CLICK_MATERIAL_DIGEST;
 
           const verification = verifyConfirmationGrant(
@@ -298,6 +306,7 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           if (actionType === "submit") {
             pendingSubmitRevalidation = { grantId: grant.grantId, materialDigest };
           }
+          riskGateCleared = true;
         }
       }
 
@@ -326,8 +335,8 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       }
 
       if (pendingSubmitRevalidation) {
-        const freshFields = (await env.kernel.call<{ fields: FormFieldSummary[] }>("formFields", { target })).fields;
-        if (computeFormValuesDigest(freshFields) !== pendingSubmitRevalidation.materialDigest) {
+        const freshSnapshot = await env.kernel.call<FormMaterialSnapshot>("formMaterialSnapshot", { target });
+        if (computeFormValuesDigest(freshSnapshot) !== pendingSubmitRevalidation.materialDigest) {
           throw confirmationGrantInvalidError("material-mismatch", pendingSubmitRevalidation.grantId);
         }
       }

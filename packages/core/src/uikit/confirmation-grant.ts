@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { SculptError } from "../errors.js";
-import type { ConfirmationGrant, FormFieldSummary } from "../types/index.js";
+import type { ConfirmationGrant, FormMaterialSnapshot } from "../types/index.js";
 
 /** The risk floor's own policy version — bump alongside a real change to
  * the keyword list or matching logic (`risk-floor.ts`) so a grant reviewed
@@ -21,23 +21,31 @@ export const RISK_FLOOR_POLICY_VERSION = "v1";
  * in for "material state" so the field is never left meaningless. */
 export const CLICK_MATERIAL_DIGEST = "click:no-material";
 
-/** Deterministic digest of a form's current field values — the "form-plan
- * digest" a `submit` grant is bound to. Excludes each field's own
- * `targetId` (a rerender assigns a new one even for the "same" field, per
- * `RefRegistry`) — only `label`/`kind`/`required`/`value` make two states
- * the same or different. The host uses this same function to compute the
- * digest it binds a grant to, so a later mismatch here is a real material
- * change, never just a coincidence of hashing differently.
+/** Deterministic digest of what a `submit` actually posts — the "form-plan
+ * digest" a `submit` grant is bound to. Built from `FormMaterialSnapshot`
+ * (`kernel/forms.ts`'s `formMaterialSnapshot` op), not `FormFieldSummary`:
+ * the material state a page can change after a human reviewer sees the form
+ * includes hidden fields and the form's own `action`/`method`, neither of
+ * which a label-keyed, visible-fields-only summary ever carries. Keyed by
+ * `name`+`id` (a hidden field has no visible label), and excludes nothing
+ * else — every field the browser will actually submit is in scope. The host
+ * uses this same function to compute the digest it binds a grant to, so a
+ * later mismatch here is a real material change, never just a coincidence
+ * of hashing differently.
  *
  * SHA-256, not a fast non-cryptographic hash: unlike a cache/recording-match
  * digest, this one is a security binding — a grant is only as trustworthy as
  * the guarantee that no two materially different field states can produce
  * the same digest. A 32-bit hash (the original djb2 here) is trivially
  * collidable by construction and must never be used for this. */
-export function computeFormValuesDigest(fields: readonly FormFieldSummary[]): string {
-  const normalized = [...fields]
-    .map((f) => ({ label: f.label, kind: f.kind, required: f.required, value: f.value ?? "" }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+export function computeFormValuesDigest(snapshot: FormMaterialSnapshot): string {
+  const normalized = {
+    action: snapshot.action,
+    method: snapshot.method,
+    fields: [...snapshot.fields]
+      .map((f) => ({ name: f.name, id: f.id, type: f.type, value: f.value ?? "" }))
+      .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id) || a.id.localeCompare(b.id))
+  };
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
