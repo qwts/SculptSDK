@@ -44,6 +44,11 @@ export interface SemanticAttachOptions {
    * none — every decision point runs in shadow mode until an operator
    * supplies real artifacts. */
   calibration?: CalibrationRegistry;
+  /** #28: whether DP-7's semantic risk predicates are `"required"` (a
+   * provider outage or invalid answer stops the action) or
+   * `"recovery_or_advisory"` (the deterministic floor decides alone).
+   * Defaults to advisory. */
+  dp7RiskDegradation?: DegradationClass;
 }
 
 export interface SemanticPointConfig<TFallback, TAccepted> {
@@ -107,6 +112,9 @@ export interface SemanticRuntimeOptions {
   /** Bounds the session-scoped decision evidence cache (#25) — least-
    * recently-used entries are evicted once this is reached. Defaults to 100. */
   decisionCacheMaxEntries?: number;
+  /** #28: `"required"` or `"recovery_or_advisory"` for DP-7's semantic risk
+   * predicates. Defaults to advisory. */
+  dp7RiskDegradation?: DegradationClass;
 }
 
 /**
@@ -150,6 +158,8 @@ export class SemanticRuntime {
    * (`SemanticRuntime` itself never reads or writes it); this just owns its
    * lifetime, clearing it on `dispose()`. */
   readonly decisionCache: DecisionEvidenceCache;
+  /** #28: degradation class for DP-7's semantic risk predicates. */
+  readonly dp7RiskDegradation: DegradationClass;
 
   private readonly points: Readonly<Record<string, boolean>>;
   private readonly defaultBudget: SemanticBudget;
@@ -171,6 +181,7 @@ export class SemanticRuntime {
     this.redactor = new Redactor(options.redactionRules ?? []);
     this.sourceOriginAllowlist = options.sourceOriginAllowlist;
     this.providerEndpointAllowlist = options.providerEndpointAllowlist;
+    this.dp7RiskDegradation = options.dp7RiskDegradation ?? "recovery_or_advisory";
     this.decisionCache = new DecisionEvidenceCache(options.decisionCacheMaxEntries);
   }
 

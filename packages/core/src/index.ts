@@ -35,7 +35,7 @@ export {
   DEFAULT_ORCHESTRATION
 } from "./uikit/index.js";
 export type { ActionEnv, OrchestrationDefaults, ActionSpec, UIExplanation, LazyHandle } from "./uikit/index.js";
-export { checkRiskFloor, confirmationRequiredError, RISK_FLOOR_KEYWORDS } from "./uikit/risk-floor.js";
+export { checkRiskFloor, confirmationRequiredError, requiredRiskCheckUnavailableError, RISK_FLOOR_KEYWORDS } from "./uikit/risk-floor.js";
 export type { RiskFloorSignals } from "./uikit/risk-floor.js";
 export {
   computeFormValuesDigest,

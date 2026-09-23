@@ -60,6 +60,19 @@ export function confirmationRequiredError(keyword: string, summary: TargetSummar
   return new SculptError(
     "CONFIRMATION_REQUIRED",
     `the deterministic risk floor matched "${keyword}" — this action needs confirmation before it can run`,
-    { layer: "uikit", target: summary, details: { matchedKeyword: keyword } }
+    { layer: "uikit", target: summary, details: { matchedKeyword: keyword, reason: "deterministic-floor" } }
+  );
+}
+
+/** #28: the operator required a DP-7 semantic risk check and it could not
+ * produce a usable answer (provider unavailable, timeout, invalid
+ * response). A hard stop, never routed through confirmation-grant
+ * verification — there is no approved risk decision for a grant to bind
+ * to, so none can clear it. */
+export function requiredRiskCheckUnavailableError(summary: TargetSummary | undefined): SculptError {
+  return new SculptError(
+    "CONFIRMATION_REQUIRED",
+    "a required DP-7 semantic risk check could not produce an answer — this action cannot proceed",
+    { layer: "uikit", target: summary, details: { reason: "required-risk-check-unavailable" } }
   );
 }
