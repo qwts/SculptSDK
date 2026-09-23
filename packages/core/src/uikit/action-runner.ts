@@ -76,6 +76,28 @@ export interface ActionSpec {
   onResolved?: (resolution: Resolution) => void;
 }
 
+/**
+ * #26's deterministic risk floor, callable outside the `runAction` retry
+ * loop. `UIForm.fill(values, { submit: true })` needs this: `formFill`
+ * writes values and dispatches `input`/`change` events *before* `submit()`
+ * ever runs, and a page's own handlers for those events could alter the
+ * form's action/text/name in response — checking only post-fill (inside
+ * `submit()`) risks seeing a state a page has already laundered from risky
+ * to benign. Callers that go through `runAction` still get their own
+ * post-resolution check too; this one covers the state before any mutation
+ * this call is about to make.
+ */
+export async function checkRiskFloorForTarget(
+  env: ActionEnv,
+  target: KernelTarget,
+  summary: TargetSummary | undefined
+): Promise<void> {
+  if (!env.semantic.enabled) return;
+  const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
+  const matched = checkRiskFloor(signals);
+  if (matched) throw confirmationRequiredError(matched, summary);
+}
+
 let actionCounter = 0;
 
 function nextActionId(): string {
