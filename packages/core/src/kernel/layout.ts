@@ -1,6 +1,6 @@
 import type { BoxModel, VisibilityState } from "../types/layout.js";
 import type { KernelContext } from "./context.js";
-import { isAriaHidden } from "./ax.js";
+import { isAriaHidden, shadowHostOf } from "./ax.js";
 
 /**
  * Layout and visibility verdicts. In real browsers these use geometry and
@@ -56,8 +56,7 @@ function styleVerdict(ctx: KernelContext, el: Element): StyleVerdict {
     }
     const parent: Element | null = current.parentElement;
     if (!parent) {
-      const root = current.getRootNode?.();
-      current = root instanceof ShadowRoot ? root.host : null;
+      current = shadowHostOf(current.getRootNode?.());
     } else {
       current = parent;
     }

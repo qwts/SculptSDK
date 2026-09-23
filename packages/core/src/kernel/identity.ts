@@ -1,7 +1,7 @@
 import type { ElementIdentity, RebindStrategy } from "../types/identity.js";
 import { normalizeText } from "../types/matchers.js";
 import type { KernelContext } from "./context.js";
-import { getAccessibleName, getRole, visibleText } from "./ax.js";
+import { getAccessibleName, getRole, shadowHostOf, visibleText } from "./ax.js";
 import { collectElements, inferKind, queryUI } from "./dom.js";
 import { resolveFieldLabel, formName, formControls } from "./forms.js";
 import { isVisibleQuick } from "./layout.js";
@@ -40,10 +40,10 @@ export function computeDomPath(el: Element): string {
     parts.unshift(`${tag}:nth-of-type(${index})`);
     const parent: Element | null = current.parentElement;
     if (!parent) {
-      const root = current.getRootNode?.();
-      if (root instanceof ShadowRoot) {
+      const host = shadowHostOf(current.getRootNode?.());
+      if (host) {
         parts.unshift("::shadow");
-        current = root.host;
+        current = host;
       } else {
         break;
       }
