@@ -24,7 +24,7 @@ import type { ActionEnv } from "./action-runner.js";
 import { runAction } from "./action-runner.js";
 import type { KernelTarget } from "../foundation/index.js";
 import { SculptError } from "../errors.js";
-import { DP1_POINT, resolveDisambiguation, type SemanticDecisionRecord } from "../semantic/index.js";
+import { DP1_POINT, DP1_RECALL_CAP, resolveDisambiguation, type SemanticDecisionRecord } from "../semantic/index.js";
 
 export { runAction, syntheticResult, DEFAULT_ORCHESTRATION } from "./action-runner.js";
 export type { ActionEnv, OrchestrationDefaults, ActionSpec } from "./action-runner.js";
@@ -355,16 +355,34 @@ export class UIRoot {
   }
 
   async tryFind(query: UIQuery): Promise<UIElement | null> {
+    return (await this.tryFindDetailed(query)).element;
+  }
+
+  /** Shared by `tryFind` and `find` so a miss carries its DP-1 recall
+   * shortlist/record through to `find`'s thrown error without changing
+   * `tryFind`'s "returns null on a miss" contract (#24). */
+  private async tryFindDetailed(query: UIQuery): Promise<{
+    element: UIElement | null;
+    missShortlist?: QueryCandidate[];
+    missRecord?: SemanticDecisionRecord;
+  }> {
     const { candidates, evidence } = await this.env.kernel.call<{ candidates: QueryCandidate[]; evidence: KernelEvidence }>(
       "query",
       { query: serializeQuery(query), limit: 5 }
     );
     const min = query.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
     const best = candidates[0];
-    if (!best || best.confidence < min) return null;
+    if (!best || best.confidence < min) {
+      if (query.recall && this.env.semantic.isPointEnabled(DP1_POINT)) {
+        const recalled = await this.resolveViaDp1Recall(query, evidence);
+        if (recalled.element) return { element: recalled.element };
+        return { element: null, missShortlist: recalled.shortlist, missRecord: recalled.record };
+      }
+      return { element: null };
+    }
     const second = candidates[1];
     if (!(second && second.confidence >= min && best.score - second.score < AMBIGUITY_MARGIN)) {
-      return instantiate(this.env, best, query.kind);
+      return { element: instantiate(this.env, best, query.kind) };
     }
 
     // A genuine tie: every candidate here already passed every mandatory
@@ -375,7 +393,7 @@ export class UIRoot {
     if (this.env.semantic.isPointEnabled(DP1_POINT)) {
       const disambiguated = await this.resolveViaDp1(query, tied, evidence);
       dp1Record = disambiguated.record;
-      if (disambiguated.element) return disambiguated.element;
+      if (disambiguated.element) return { element: disambiguated.element };
     }
 
     throw new SculptError("TARGET_AMBIGUOUS", "query matched multiple equally-ranked elements", {
@@ -405,6 +423,7 @@ export class UIRoot {
       runtime: this.env.semantic,
       origin: safeOrigin(route.url),
       tied,
+      mode: "tie",
       intent: describeQueryIntent(query),
       routePath: route.path + route.hash,
       documentEvidence: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch }
@@ -413,15 +432,49 @@ export class UIRoot {
     return { element: accepted ? instantiate(this.env, accepted, query.kind) : null, record };
   }
 
+  /** DP-1 recall (#24): re-queries with only `name`/`text` dropped — every
+   * other predicate, including `within`/`route`/`region`/`state`, stays
+   * exactly as mandatory as in the original query. Deterministic, capped
+   * retrieval (`DP1_RECALL_CAP`); never throws, never widens beyond that
+   * capped shortlist. */
+  private async resolveViaDp1Recall(
+    query: UIQuery,
+    evidence: KernelEvidence
+  ): Promise<{ element: UIElement | null; shortlist: QueryCandidate[]; record: SemanticDecisionRecord }> {
+    const recallQuery: UIQuery = { ...query, name: undefined, text: undefined, recall: undefined, minConfidence: undefined };
+    const { candidates: shortlist } = await this.env.kernel.call<{ candidates: QueryCandidate[] }>("query", {
+      query: serializeQuery(recallQuery),
+      limit: DP1_RECALL_CAP
+    });
+    const route = await this.env.foundation.observers.routeState();
+    const { acceptedTargetId, record } = await resolveDisambiguation({
+      runtime: this.env.semantic,
+      origin: safeOrigin(route.url),
+      tied: shortlist,
+      mode: "miss",
+      intent: describeQueryIntent(query),
+      routePath: route.path + route.hash,
+      documentEvidence: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch }
+    });
+    const accepted = acceptedTargetId ? shortlist.find((c) => c.summary.targetId === acceptedTargetId) : undefined;
+    return { element: accepted ? instantiate(this.env, accepted, query.kind) : null, shortlist, record };
+  }
+
   async find(query: UIQuery): Promise<UIElement> {
-    const found = await this.tryFind(query);
-    if (!found) {
+    const { element, missShortlist, missRecord } = await this.tryFindDetailed(query);
+    if (!element) {
       throw new SculptError("TARGET_NOT_FOUND", "no element matched the semantic query", {
         layer: "uikit",
-        details: { query: JSON.parse(JSON.stringify(serializeQuery(query))) as Record<string, unknown> }
+        details: {
+          query: JSON.parse(JSON.stringify(serializeQuery(query))) as Record<string, unknown>,
+          ...(missShortlist
+            ? { shortlist: missShortlist.slice(0, 3).map((c) => ({ name: c.summary.name, role: c.summary.role, score: c.score })) }
+            : {}),
+          ...(missRecord ? { semantic: missRecord } : {})
+        }
       });
     }
-    return found;
+    return element;
   }
 
   /** Builds a typed handle from an existing target reference. */

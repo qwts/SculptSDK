@@ -22,6 +22,11 @@ export interface UIQuery {
   region?: LayoutRegion;
   state?: Record<string, unknown>;
   minConfidence?: number;
+  /** Opt in to DP-1 recall on a miss (#24): `name`/`text` are dropped and
+   * every other predicate stays mandatory, deterministic and capped. Off by
+   * default even when DP-1 is enabled — never sent to the kernel, Node
+   * decides whether to run a second, structural-only query. */
+  recall?: boolean;
 }
 
 /** UIQuery in serialization-safe form for transport into the page. */
@@ -45,8 +50,9 @@ export interface WireUIQuery {
 }
 
 export function serializeQuery(query: UIQuery): WireUIQuery {
+  const { recall: _recall, ...rest } = query;
   return {
-    ...query,
+    ...rest,
     name: serializeMatcher(query.name),
     text: serializeMatcher(query.text),
     label: serializeMatcher(query.label),

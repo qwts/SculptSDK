@@ -48,11 +48,12 @@ function acceptedAnswerFor(targetId: string, providerConfidence = 0.9): RawDecis
   return { answers: [{ kind: "choice", questionId: "target", selected: targetId, providerConfidence }] };
 }
 
-function baseOptions(runtime: SemanticRuntime, tied: QueryCandidate[]) {
+function baseOptions(runtime: SemanticRuntime, tied: QueryCandidate[], mode: "tie" | "miss" = "tie") {
   return {
     runtime,
     origin: ORIGIN,
     tied,
+    mode,
     intent: "find a button named like \"Save\"",
     routePath: "/edit",
     documentEvidence: { documentId: "doc-1", navigationEpoch: 0 }

@@ -1,9 +1,10 @@
 /**
- * @experimental DP-1 target resolution — disambiguation (#23). The first
- * production decision point: `tryFind` calls this only on a genuine tie
- * (every option already passed every mandatory matcher deterministically);
- * DP-1 never widens the candidate set, it only helps pick among candidates
- * the kernel already admitted. Recall (opt-in, on a miss) is #24.
+ * @experimental DP-1 target resolution (#23 disambiguation, #24 recall).
+ * The first production decision point: `resolveDisambiguation` is called
+ * either on a genuine tie (`mode: "tie"`, every option already passed
+ * every mandatory matcher deterministically) or, opt-in only, on a miss
+ * with text matchers dropped (`mode: "miss"`, #24) — DP-1 never widens the
+ * candidate set beyond what the kernel already admitted for that mode.
  */
 import type { OperationBudget } from "../budget.js";
 import type { QueryCandidate } from "../../types/queries.js";
@@ -19,6 +20,9 @@ export const DP1_POINT: DecisionPoint = "dp1-target";
 export const DP1_MODEL = "unset";
 export const DP1_QUESTION_VERSION = "v1";
 export const DP1_POLICY_VERSION = "v1";
+/** Deterministic retrieval cap for recall's shortlist (#24). The 32 figure
+ * from #2 is a hypothesis for #20/#21 to set empirically. */
+export const DP1_RECALL_CAP = 32;
 
 export type Dp1Mode = "tie" | "miss";
 
@@ -31,10 +35,13 @@ function everyMandatoryPredicateVerified(candidates: readonly QueryCandidate[]):
 export interface Dp1DisambiguationOptions {
   runtime: SemanticRuntime;
   origin: string;
-  /** The tied candidates only — already passed every mandatory matcher and
-   * are within the query's ambiguity margin of each other. Never a broader
-   * "everything that sort of matched" set (I3/§23). */
+  /** `"tie"`: the tied candidates only, within the query's ambiguity margin
+   * of each other. `"miss"` (#24, recall): the capped structural-only
+   * shortlist, text matchers dropped. Either way, never a broader
+   * "everything that sort of matched" set than what the kernel actually
+   * admitted for that mode (I3). */
   tied: readonly QueryCandidate[];
+  mode: Dp1Mode;
   /** One intent sentence describing the query, plus the route path (§2's
    * DP-1 state shape). Both are free text — learned by the runtime's
    * redactor before being sent, same as any other outbound string. */
@@ -163,13 +170,12 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
         // DP-1 runs in shadow mode — record what the provider said, accept
         // nothing. This is the only gate deciding acceptance; nothing above
         // this line ever treats a confidence number as a threshold.
-        const mode: Dp1Mode = "tie";
         const threshold = runtime.calibration.lookup({
           point: DP1_POINT,
           model: DP1_MODEL,
           policyVersion: DP1_POLICY_VERSION,
           questionVersion: DP1_QUESTION_VERSION,
-          mode
+          mode: options.mode
         });
         if (!threshold) return undefined;
         const confidence = accepted.accepted.selectedOptionProbability ?? accepted.accepted.providerConfidence ?? 0;
