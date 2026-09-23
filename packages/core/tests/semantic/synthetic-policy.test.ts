@@ -64,6 +64,29 @@ describe("synthetic policy — deterministic admission", () => {
     });
   });
 
+  it("carries each candidate's accessible name into the outbound DTOs", async () => {
+    // Regression (Bugbot finding on #17): SyntheticCandidate.name must be
+    // mapped to buildCandidateSummaryDTO's accessibleName field explicitly
+    // — passing the candidate object through unmapped silently drops the
+    // name, since the field names don't line up.
+    await withFixture(async (sculpt) => {
+      const { candidates } = await gatherAdmittedCandidates(sculpt, { kind: "button", visible: true, enabled: true });
+      const saveId = candidates.find((c) => c.name === "Save")!.targetId;
+
+      let capturedRequest: DecisionRequest | undefined;
+      const provider = stubProvider(async (request) => {
+        capturedRequest = request;
+        return acceptedAnswerFor(saveId);
+      });
+      const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "metadata" }, provider });
+
+      await runSyntheticPolicy({ runtime, admittedCandidates: candidates, origin: ORIGIN, degradation: "recovery_or_advisory" });
+
+      const dtos = capturedRequest?.redactedState as { accessibleName?: string }[] | undefined;
+      expect(dtos?.map((d) => d.accessibleName).sort()).toEqual(["Cancel", "Save"]);
+    });
+  });
+
   it("accepts a valid selection from the admitted set (required variant)", async () => {
     await withFixture(async (sculpt) => {
       const { candidates } = await gatherAdmittedCandidates(sculpt, { kind: "button", visible: true, enabled: true });

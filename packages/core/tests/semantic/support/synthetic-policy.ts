@@ -139,8 +139,13 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
       },
       questions: [{ kind: "choice", id: "target", options: optionIds }],
       // Step 2: compiled through the #16 DTO framework — allowlisted,
-      // redacted, truncated. Never a raw value.
-      redactedState: admittedCandidates.map((c) => buildCandidateSummaryDTO(c, runtime.redactor))
+      // redacted, truncated. Never a raw value. `SyntheticCandidate.name` is
+      // the kernel's accessible name; buildCandidateSummaryDTO's input field
+      // is named accessibleName, so it's mapped explicitly here rather than
+      // relying on an unrelated property name lining up by accident.
+      redactedState: admittedCandidates.map((c) =>
+        buildCandidateSummaryDTO({ targetId: c.targetId, kind: c.kind, role: c.role, accessibleName: c.name }, runtime.redactor)
+      )
     }),
     select: (outcomes) => {
       capturedOutcomes = outcomes;
