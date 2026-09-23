@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Place order</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      .status { margin-top: 12px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>Checkout</h1>
+    <p>DP-7 risk floor fixture (#26): the submit button's own text is benign ("Place order") — the keyword is only in the form's own <code>action</code> attribute.</p>
+
+    <form id="order-form" action="/checkout/purchase">
+      <button id="order-btn" type="submit">Place order</button>
+    </form>
+    <div class="status" id="status"></div>
+
+    <script>
+      document.getElementById("order-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.getElementById("status").textContent = "order placed";
+      });
+    </script>
+  </body>
+</html>

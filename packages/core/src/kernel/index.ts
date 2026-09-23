@@ -5,7 +5,7 @@ import type { WireUIQuery, QueryCandidate } from "../types/queries.js";
 import type { AnyWindow, KernelContext, KernelOptions } from "./context.js";
 import { createContext, KernelError } from "./context.js";
 import { getAccessibleName, getRole, isDisabled } from "./ax.js";
-import { describeNode, inferKind, queryUI } from "./dom.js";
+import { describeNode, inferKind, queryUI, riskSignals } from "./dom.js";
 import { computeVisibility, getBox, clickPoint, isVisibleQuick, scrollIntoView } from "./layout.js";
 import {
   clearValue,
@@ -21,11 +21,10 @@ import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-// Bumped for §25: page evidence now carries the kernel's own build version,
-// the "candidate-generation version" a decision evidence cache keys on so a
-// cache entry can never survive a candidate-generation behavior change
-// silently. Additive.
-export const KERNEL_VERSION = "0.5.0";
+// Bumped for §26: a new `riskSignals` op gives the deterministic risk floor
+// what it checks (accessible name, visible text, form action) in one call.
+// Additive.
+export const KERNEL_VERSION = "0.6.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -183,6 +182,7 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
     },
 
     describe: (a: TargetArg) => describeNode(ctx, el(a)),
+    riskSignals: (a: TargetArg) => riskSignals(el(a)),
     visibility: (a: TargetArg) => {
       try {
         return computeVisibility(ctx, el(a));

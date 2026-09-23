@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Delete account</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      .status { margin-top: 12px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>Account settings</h1>
+    <p>DP-7 risk floor fixture (#26): a destructive click, no form involved. The button's own accessible name carries the keyword.</p>
+
+    <button id="delete-btn" type="button">Delete my account</button>
+    <div class="status" id="status"></div>
+
+    <script>
+      document.getElementById("delete-btn").addEventListener("click", () => {
+        document.getElementById("status").textContent = "account deleted";
+      });
+    </script>
+  </body>
+</html>

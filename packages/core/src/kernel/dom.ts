@@ -409,3 +409,23 @@ export function describeNode(ctx: KernelContext, el: Element): DomNode {
     inShadowRoot: shadowHostOf(el.getRootNode?.()) !== null
   };
 }
+
+export interface RiskSignals {
+  accessibleName?: string;
+  text?: string;
+  /** The target's own `action` attribute if it's a form, else its nearest
+   * ancestor form's — a click on a button inside a risky-named form still
+   * carries that form's action (§26). */
+  formAction?: string;
+}
+
+/** Deterministic-risk-floor inputs (#26): accessible name, visible text, and
+ * form action — nothing else, and never a form value. */
+export function riskSignals(el: Element): RiskSignals {
+  const form = el.closest("form");
+  return {
+    accessibleName: getAccessibleName(el) || undefined,
+    text: visibleText(el).slice(0, 300) || undefined,
+    formAction: form?.getAttribute("action") ?? undefined
+  };
+}

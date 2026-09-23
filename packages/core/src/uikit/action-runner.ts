@@ -18,6 +18,7 @@ import type { FoundationLayer, KernelTarget, Resolution } from "../foundation/in
 import type { KernelClient } from "../foundation/kernel-client.js";
 import { SculptError, toSculptError } from "../errors.js";
 import type { SemanticRuntime } from "../semantic/runtime.js";
+import { checkRiskFloor, confirmationRequiredError, type RiskFloorSignals } from "./risk-floor.js";
 
 /**
  * Interaction contract engine (§18): every action runs preconditions,
@@ -212,6 +213,17 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       target = { targetId: resolution.summary.targetId, identity: resolution.identity, guard: target.guard };
       summary = resolution.summary;
       spec.onResolved?.(resolution);
+
+      // #26: the deterministic risk floor — click/submit only, no provider,
+      // nothing that could be gamed by a later answer. Checked before
+      // preconditions/dispatch; a match throws CONFIRMATION_REQUIRED, which
+      // is non-retryable (see CODE_TRAITS), so the loop below breaks
+      // immediately rather than retrying past it.
+      if (env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
+        const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
+        const matched = checkRiskFloor(signals);
+        if (matched) throw confirmationRequiredError(matched, summary);
+      }
 
       let visibility = await env.foundation.layout.visible(target);
       if (

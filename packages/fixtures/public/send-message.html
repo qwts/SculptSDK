@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Send message</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      .status { margin-top: 12px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>Compose</h1>
+
+    <form id="compose-form" action="/api/messages">
+      <p>This will send a message to every recipient on the thread.</p>
+      <textarea name="body"></textarea>
+      <button id="confirm-btn" type="submit">Confirm</button>
+    </form>
+    <div class="status" id="status"></div>
+
+    <script>
+      document.getElementById("compose-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.getElementById("status").textContent = "message sent";
+      });
+    </script>
+  </body>
+</html>
