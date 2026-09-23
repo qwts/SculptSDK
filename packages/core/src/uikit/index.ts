@@ -5,6 +5,7 @@ import type {
   ClickOptions,
   CloseOptions,
   ElementIdentity,
+  ExecutionGuard,
   FormFillOptions,
   FormFillResult,
   SetValueOptions,
@@ -65,8 +66,20 @@ export class UIElement {
     return this.summary.enabled !== false;
   }
 
-  protected target(): KernelTarget {
-    return { targetId: this.summary.targetId, identity: this.identity };
+  protected target(guard?: ExecutionGuard): KernelTarget {
+    return { targetId: this.summary.targetId, identity: this.identity, guard };
+  }
+
+  /** Builds the #22 guard binding a mutation to this handle's identity at
+   * the given evidence — the shape a decision-point policy captures when it
+   * makes its choice, e.g. from `queryWithEvidence()` or `observers.evidence()`. */
+  guardFrom(evidence: { documentId: string; navigationEpoch: number }): ExecutionGuard {
+    return {
+      documentId: evidence.documentId,
+      navigationEpoch: evidence.navigationEpoch,
+      targetDigest: this.identity.id,
+      rebind: "forbid"
+    };
   }
 
   /** Keeps the handle fresh after the action runner rebinds a stale target. */
@@ -88,7 +101,7 @@ export class UIElement {
   async click(options: ClickOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "click",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -115,7 +128,7 @@ export class UIInput extends UIElement {
   async setValue(value: unknown, options: SetValueOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "set-value",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -134,7 +147,7 @@ export class UIInput extends UIElement {
   async type(text: string, options: ActionOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "type",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -147,7 +160,7 @@ export class UIInput extends UIElement {
   async clear(options: ClearOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "clear",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -162,7 +175,7 @@ export class UISelect extends UIInput {
   async select(value: string | string[], options: ActionOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "select",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -187,11 +200,17 @@ export class UIForm extends UIElement {
 
   async fill(values: Record<string, unknown>, options: FormFillOptions = {}): Promise<FormFillResult> {
     const result = await this.env.kernel.call<FormFillResult>("formFill", {
-      target: this.target(),
+      target: this.target(options.guard),
       values
     });
     if (options.submit && result.ok) {
-      await this.submit(options);
+      const submitResult = await this.submit(options);
+      if (!submitResult.ok) {
+        // The fill itself succeeded, but the caller asked for submit and
+        // didn't get it — never report success for a submission that never
+        // happened (e.g. a #22 guard mismatch after a fill-induced rerender).
+        return { ...result, ok: false, submitError: submitResult.error };
+      }
     }
     return result;
   }
@@ -199,7 +218,7 @@ export class UIForm extends UIElement {
   async submit(options: SubmitOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "submit",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       validationScope: this.target(),
       // Forms themselves are containers; their own occlusion is irrelevant.
@@ -246,7 +265,7 @@ export class UIDialog extends UIElement {
   async close(options: CloseOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "close-dialog",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       defaultPreconditions: { mustNotBeOccluded: false },
       onResolved: this.trackResolution(),
@@ -388,11 +407,16 @@ export class UIRoot {
  *   await sculpt.ui.button({...}).click();
  */
 export type LazyHandle<T> = PromiseLike<T> & {
+  // The runtime always defers through the underlying promise, so every lazy
+  // method call is async regardless of whether the resolved method itself
+  // is sync (e.g. `guardFrom`) or already async — the type must say so too,
+  // or a lazy call on a sync method type-checks as sync but returns a
+  // Promise at runtime.
   [K in keyof T as T[K] extends (...args: never[]) => unknown ? K : never]: T[K] extends (
     ...args: infer A
-  ) => Promise<infer R>
-    ? (...args: A) => Promise<R>
-    : T[K];
+  ) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : never;
 };
 
 const LAZY_METHODS = [
@@ -411,7 +435,8 @@ const LAZY_METHODS = [
   "extract",
   "value",
   "explain",
-  "describe"
+  "describe",
+  "guardFrom"
 ] as const;
 
 function lazy<T extends UIElement>(promise: Promise<T>): LazyHandle<T> {

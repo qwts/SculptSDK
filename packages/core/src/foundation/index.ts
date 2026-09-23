@@ -5,6 +5,7 @@ import type {
   ClickOptions,
   DomNode,
   ElementIdentity,
+  ExecutionGuard,
   InputMode,
   KernelEvidence,
   KeySequence,
@@ -32,6 +33,9 @@ export { KernelClient } from "./kernel-client.js";
 export interface KernelTarget {
   targetId: string;
   identity?: ElementIdentity;
+  /** #22: when set, every kernel op resolving this target enforces it — a
+   * mismatch fails closed with a typed stale error and never rebinds. */
+  guard?: ExecutionGuard;
 }
 
 export interface Resolution {
