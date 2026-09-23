@@ -15,10 +15,21 @@ describe("checkRiskFloor", () => {
     }
   });
 
-  it("matches on accessible name, visible text, or form action independently", () => {
+  it("matches on accessible name, visible text, form action, or link href independently", () => {
     expect(checkRiskFloor({ accessibleName: "Delete" })).toBe("delete");
     expect(checkRiskFloor({ text: "This will delete your data" })).toBe("delete");
     expect(checkRiskFloor({ formAction: "/api/delete-account" })).toBe("delete");
+    // A link click never goes through a form at all — formAction alone
+    // would miss <a href="/account/delete">Continue</a>.
+    expect(checkRiskFloor({ href: "/account/delete" })).toBe("delete");
+  });
+
+  it("matches a keyword delimited by an underscore, not just a hyphen", () => {
+    // A bare `\b` boundary treats `_` as a word character, so
+    // `\bdelete\b` misses "delete_account" even though it catches
+    // "delete-account" — common in REST paths and ids either way.
+    expect(checkRiskFloor({ formAction: "/api/delete_account" })).toBe("delete");
+    expect(checkRiskFloor({ formAction: "/api/remove_user" })).toBe("remove");
   });
 
   it("returns undefined when none of the three signals read as risky", () => {

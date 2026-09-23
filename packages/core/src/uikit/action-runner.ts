@@ -4,7 +4,7 @@ import type {
   ActionResult,
   BrowserCapabilities,
   CheckResult,
-  FormFieldSummary,
+  FormMaterialSnapshot,
   InputMode,
   PostconditionExpectation,
   RecoveryStep,
@@ -21,7 +21,13 @@ import { SculptError, toSculptError } from "../errors.js";
 import type { SemanticRuntime } from "../semantic/runtime.js";
 import { resolveRiskPredicates, DP7_POINT } from "../semantic/points/dp7-risk.js";
 import { checkRiskFloor, confirmationRequiredError, requiredRiskCheckUnavailableError, type RiskFloorSignals } from "./risk-floor.js";
-import { computeFormValuesDigest, CLICK_MATERIAL_DIGEST, ConsumedGrantRegistry, verifyConfirmationGrant } from "./confirmation-grant.js";
+import {
+  computeFormValuesDigest,
+  confirmationGrantInvalidError,
+  CLICK_MATERIAL_DIGEST,
+  ConsumedGrantRegistry,
+  verifyConfirmationGrant
+} from "./confirmation-grant.js";
 
 /**
  * Interaction contract engine (§18): every action runs preconditions,
@@ -69,6 +75,28 @@ export interface ActionSpec {
   /** Form scope for expectNoValidationErrors. */
   validationScope?: KernelTarget;
   onResolved?: (resolution: Resolution) => void;
+}
+
+/**
+ * #26's deterministic risk floor, callable outside the `runAction` retry
+ * loop. `UIForm.fill(values, { submit: true })` needs this: `formFill`
+ * writes values and dispatches `input`/`change` events *before* `submit()`
+ * ever runs, and a page's own handlers for those events could alter the
+ * form's action/text/name in response — checking only post-fill (inside
+ * `submit()`) risks seeing a state a page has already laundered from risky
+ * to benign. Callers that go through `runAction` still get their own
+ * post-resolution check too; this one covers the state before any mutation
+ * this call is about to make.
+ */
+export async function checkRiskFloorForTarget(
+  env: ActionEnv,
+  target: KernelTarget,
+  summary: TargetSummary | undefined
+): Promise<void> {
+  if (!env.semantic.enabled) return;
+  const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
+  const matched = checkRiskFloor(signals);
+  if (matched) throw confirmationRequiredError(matched, summary);
 }
 
 let actionCounter = 0;
@@ -209,6 +237,15 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
   let mode: InputMode | undefined;
   let value: unknown;
   let executed = false;
+  // A grant is verified and consumed at most once per `runAction` call, not
+  // once per attempt: a retryable precondition failure (e.g. the target
+  // isn't visible yet) re-enters this loop with the *same* grant, which
+  // `env.consumedGrants` would otherwise already show as consumed —
+  // reporting a spurious "reused" on a grant that's still doing its job for
+  // this very call. Once cleared, later attempts skip the gate entirely and
+  // reuse the guard/material check it already established.
+  let riskGateCleared = false;
+  let pendingSubmitRevalidation: { grantId: string; materialDigest: string } | undefined;
 
   for (let attempt = 0; attempt <= recovery.retryLimit; attempt++) {
     if (attempt > 0) recoverySteps.push({ step: "retry", ok: true, detail: `attempt ${attempt + 1}` });
@@ -237,8 +274,10 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       // that verifies clean for this exact action/target/document/material
       // state (#27) — the thrown error is always non-retryable (see
       // CODE_TRAITS), so the loop below breaks immediately rather than
-      // retrying past it.
-      if (env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
+      // retrying past it. Verified and consumed at most once per call
+      // (`riskGateCleared`, #27) — a retryable precondition failure on a
+      // later attempt must not re-check an already-consumed grant.
+      if (!riskGateCleared && env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
         const actionType = spec.action as "click" | "submit";
         const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
         let matched = checkRiskFloor(signals);
@@ -270,7 +309,7 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           const route = await env.foundation.observers.routeState();
           const materialDigest =
             actionType === "submit"
-              ? computeFormValuesDigest((await env.kernel.call<{ fields: FormFieldSummary[] }>("formFields", { target })).fields)
+              ? computeFormValuesDigest(await env.kernel.call<FormMaterialSnapshot>("formMaterialSnapshot", { target }))
               : CLICK_MATERIAL_DIGEST;
 
           const verification = verifyConfirmationGrant(
@@ -291,7 +330,31 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           if (!verification.ok) throw verification.error;
           // Consumed the instant it clears the floor — regardless of
           // whether the action goes on to succeed for an unrelated reason.
-          env.consumedGrants.consume(grant.grantId);
+          env.consumedGrants.consume(grant.grantId, grant.expiresAt);
+
+          // A verified grant is bound to one exact element and one exact
+          // material state — reviewed once, at this instant. Without a
+          // guard, nothing stops the rest of this attempt (visibility wait,
+          // scroll, dispatch) from silently rebinding to a replacement
+          // element that happens to look "similar enough" (the default
+          // unguarded path's whole purpose). Attaching #22's guard here
+          // makes every subsequent kernel call for this attempt fail closed
+          // instead, reusing the exact identity the grant was verified
+          // against.
+          target = {
+            ...target,
+            guard: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch, targetDigest: resolution.identity.id, rebind: "forbid" }
+          };
+
+          // The guard above binds the *target*, not the *material*: a form's
+          // values can still change in the gap between this digest and the
+          // actual dispatch below. Re-checked immediately before dispatch so
+          // that gap is as small as this loop can make it, on top of (not
+          // instead of) the snapshot already verified against the grant.
+          if (actionType === "submit") {
+            pendingSubmitRevalidation = { grantId: grant.grantId, materialDigest };
+          }
+          riskGateCleared = true;
         }
       }
 
@@ -317,6 +380,13 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           continue;
         }
         break;
+      }
+
+      if (pendingSubmitRevalidation) {
+        const freshSnapshot = await env.kernel.call<FormMaterialSnapshot>("formMaterialSnapshot", { target });
+        if (computeFormValuesDigest(freshSnapshot) !== pendingSubmitRevalidation.materialDigest) {
+          throw confirmationGrantInvalidError("material-mismatch", pendingSubmitRevalidation.grantId);
+        }
       }
 
       const outcome = await spec.execute(target);

@@ -30,6 +30,7 @@ export interface RiskFloorSignals {
   accessibleName?: string;
   text?: string;
   formAction?: string;
+  href?: string;
 }
 
 function escapeRegExp(text: string): string {
@@ -38,10 +39,14 @@ function escapeRegExp(text: string): string {
 
 // Whole-word matching, not a bare substring test — "Sender preferences" and
 // "Payroll settings" must never trip on "send"/"pay" the way a plain
-// `.includes()` would.
+// `.includes()` would. Custom lookaround boundaries, not `\b`: `\b` treats
+// `_` as a word character, so `\bdelete\b` misses "delete_account" (common
+// in REST paths/ids) even though it catches the hyphenated equivalent —
+// only a letter or digit on either side should count as "still inside a
+// word".
 const KEYWORD_PATTERNS: readonly { keyword: string; pattern: RegExp }[] = RISK_FLOOR_KEYWORDS.map((keyword) => ({
   keyword,
-  pattern: new RegExp(`\\b${escapeRegExp(keyword)}\\b`, "i")
+  pattern: new RegExp(`(?<![a-zA-Z0-9])${escapeRegExp(keyword)}(?![a-zA-Z0-9])`, "i")
 }));
 
 function matchKeyword(text: string | undefined): string | undefined {
@@ -49,11 +54,18 @@ function matchKeyword(text: string | undefined): string | undefined {
   return KEYWORD_PATTERNS.find(({ pattern }) => pattern.test(text))?.keyword;
 }
 
-/** Returns the matched keyword, or `undefined` if none of the three signals
- * read as risky. Checked in a fixed order only so the matched keyword in an
- * error/record is deterministic, not because any one signal outranks another. */
+/** Returns the matched keyword, or `undefined` if none of the signals read
+ * as risky. Checked in a fixed order only so the matched keyword in an
+ * error/record is deterministic, not because any one signal outranks
+ * another. `href` covers a link click, which never goes through a form at
+ * all — `formAction` alone would miss a risky navigation entirely. */
 export function checkRiskFloor(signals: RiskFloorSignals): string | undefined {
-  return matchKeyword(signals.accessibleName) ?? matchKeyword(signals.text) ?? matchKeyword(signals.formAction);
+  return (
+    matchKeyword(signals.accessibleName) ??
+    matchKeyword(signals.text) ??
+    matchKeyword(signals.formAction) ??
+    matchKeyword(signals.href)
+  );
 }
 
 export function confirmationRequiredError(keyword: string, summary: TargetSummary | undefined): SculptError {

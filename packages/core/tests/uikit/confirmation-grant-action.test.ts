@@ -2,10 +2,26 @@ import { describe, expect, it } from "vitest";
 import { TestHarnessAdapter } from "@sculptsdk/adapter-testing";
 import {
   CLICK_MATERIAL_DIGEST,
+  computeFormValuesDigest,
   RISK_FLOOR_POLICY_VERSION,
   Sculpt,
-  type ConfirmationGrant
+  type ConfirmationGrant,
+  type FormMaterialSnapshot
 } from "@sculptsdk/core";
+
+/** Same op the real risk gate uses to bind a submit grant's materialDigest
+ * (`formMaterialSnapshot`) — a test builds the grant's digest the same way
+ * a real host would, through the kernel, rather than duplicating its
+ * browser-side field/hash logic. */
+async function materialSnapshot(adapter: TestHarnessAdapter, targetId: string): Promise<FormMaterialSnapshot> {
+  const envelope = await adapter.call<{ ok: boolean; value?: FormMaterialSnapshot; error?: { message: string } }>({
+    name: "kernel.call",
+    op: "formMaterialSnapshot",
+    args: { target: { targetId } }
+  });
+  if (!envelope.ok || !envelope.value) throw new Error(`formMaterialSnapshot failed: ${envelope.error?.message}`);
+  return envelope.value;
+}
 
 /**
  * DP-7 single-use confirmation grants wired into the real `runAction` path
@@ -188,6 +204,210 @@ describe("confirmation grants: satisfy only the risk gate, never a precondition"
       // Not CONFIRMATION_REQUIRED/CONFIRMATION_GRANT_INVALID — the grant
       // cleared the floor; the ordinary visibility precondition still runs
       // and still fails on its own terms.
+      expect(result.error?.code).toBe("TARGET_NOT_VISIBLE");
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+});
+
+describe("confirmation grants: review-flagged hardening", () => {
+  it("a password value changed since the grant was issued is caught, not masked by a fixed placeholder", async () => {
+    const RISKY_FORM_HTML = `<!doctype html><html><body>
+      <form id="risky-form" aria-label="Danger zone" action="/api/delete-account">
+        <input type="password" name="confirm-password" />
+        <button id="confirm-btn" type="submit">Confirm</button>
+      </form>
+    </body></html>`;
+    const { sculpt, adapter } = await attach(RISKY_FORM_HTML);
+    try {
+      const password = adapter.document.querySelector('input[type="password"]') as HTMLInputElement;
+      password.value = "first-password";
+
+      const form = await sculpt.ui.form({ name: "Danger zone" });
+      const materialDigest = computeFormValuesDigest(await materialSnapshot(adapter, form.summary.targetId));
+      const evidence = await sculpt.foundation.observers.evidence();
+      const route = await sculpt.foundation.observers.routeState();
+      const grant: ConfirmationGrant = {
+        grantId: "grant-password",
+        actionType: "submit",
+        targetDigest: form.identity.id,
+        documentId: evidence.documentId,
+        navigationEpoch: evidence.navigationEpoch,
+        origin: new URL(route.url).origin,
+        materialDigest,
+        policyVersion: RISK_FLOOR_POLICY_VERSION,
+        riskDecision: "delete",
+        expiresAt: Date.now() + 60_000
+      };
+
+      // A non-empty password used to always summarize to the same fixed
+      // "•••" placeholder — this change would have been invisible to the
+      // material digest, letting a grant reviewed against one password
+      // silently clear a submit with a different one.
+      password.value = "a-completely-different-password";
+
+      const result = await sculpt.ui.form({ name: "Danger zone" }).submit({ confirmation: grant });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("CONFIRMATION_GRANT_INVALID");
+      expect(result.error?.details?.reason).toBe("material-mismatch");
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("a hidden field changed since the grant was issued is caught — summarizeFields alone never sees it", async () => {
+    const RISKY_FORM_HTML = `<!doctype html><html><body>
+      <form id="risky-form" aria-label="Danger zone" action="/api/delete-account">
+        <input type="hidden" name="account-id" value="acct-1" />
+        <button id="confirm-btn" type="submit">Confirm</button>
+      </form>
+    </body></html>`;
+    const { sculpt, adapter } = await attach(RISKY_FORM_HTML);
+    try {
+      const form = await sculpt.ui.form({ name: "Danger zone" });
+      const materialDigest = computeFormValuesDigest(await materialSnapshot(adapter, form.summary.targetId));
+      const evidence = await sculpt.foundation.observers.evidence();
+      const route = await sculpt.foundation.observers.routeState();
+      const grant: ConfirmationGrant = {
+        grantId: "grant-hidden-field",
+        actionType: "submit",
+        targetDigest: form.identity.id,
+        documentId: evidence.documentId,
+        navigationEpoch: evidence.navigationEpoch,
+        origin: new URL(route.url).origin,
+        materialDigest,
+        policyVersion: RISK_FLOOR_POLICY_VERSION,
+        riskDecision: "delete",
+        expiresAt: Date.now() + 60_000
+      };
+
+      // A hidden field a page can retarget (a different account id) — never
+      // shown to a human reviewer, and `formControls()`/`summarizeFields()`
+      // (what a `FormFieldSummary`-based digest was built from) drop hidden
+      // inputs entirely, so this change would have been invisible to the
+      // old digest.
+      (adapter.document.querySelector('input[name="account-id"]') as HTMLInputElement).value = "acct-attacker";
+
+      const result = await sculpt.ui.form({ name: "Danger zone" }).submit({ confirmation: grant });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("CONFIRMATION_GRANT_INVALID");
+      expect(result.error?.details?.reason).toBe("material-mismatch");
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("form values changed after the grant clears but before dispatch are caught at dispatch time", async () => {
+    const RISKY_FORM_HTML = `<!doctype html><html><body>
+      <form id="risky-form" aria-label="Danger zone" action="/api/delete-account">
+        <input name="amount" value="100" />
+        <button id="confirm-btn" type="submit">Confirm</button>
+      </form>
+    </body></html>`;
+    const { sculpt, adapter } = await attach(RISKY_FORM_HTML);
+    try {
+      const form = await sculpt.ui.form({ name: "Danger zone" });
+      const materialDigest = computeFormValuesDigest(await materialSnapshot(adapter, form.summary.targetId));
+      const evidence = await sculpt.foundation.observers.evidence();
+      const route = await sculpt.foundation.observers.routeState();
+      const grant: ConfirmationGrant = {
+        grantId: "grant-amount",
+        actionType: "submit",
+        targetDigest: form.identity.id,
+        documentId: evidence.documentId,
+        navigationEpoch: evidence.navigationEpoch,
+        origin: new URL(route.url).origin,
+        materialDigest,
+        policyVersion: RISK_FLOOR_POLICY_VERSION,
+        riskDecision: "delete",
+        expiresAt: Date.now() + 60_000
+      };
+
+      let dispatched = false;
+      let materialSnapshotCalls = 0;
+      const originalCall = adapter.call.bind(adapter);
+      // "formMaterialSnapshot" is read twice per attempt when a submit grant
+      // is used: once inside the risk gate (to bind the grant's
+      // materialDigest), once again right before dispatch (the #5
+      // revalidation this test targets). Mutating on the 2nd call — the
+      // revalidation, now that the grant's own priming read above is done —
+      // simulates the value changing in the gap between the grant clearing
+      // verification and the actual dispatch.
+      adapter.call = (async (operation: Parameters<typeof originalCall>[0]) => {
+        if ("op" in operation && operation.op === "formMaterialSnapshot") {
+          materialSnapshotCalls++;
+          if (materialSnapshotCalls === 2) {
+            (adapter.document.querySelector('input[name="amount"]') as HTMLInputElement).value = "999999";
+          }
+        }
+        if ("op" in operation && operation.op === "formSubmit") dispatched = true;
+        return originalCall(operation);
+      }) as typeof adapter.call;
+
+      const result = await sculpt.ui.form({ name: "Danger zone" }).submit({ confirmation: grant, recovery: { retryLimit: 0 } });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("CONFIRMATION_GRANT_INVALID");
+      expect(result.error?.details?.reason).toBe("material-mismatch");
+      // The mutation happened inside the intercepted formSubmit call, so if
+      // dispatch reached the kernel at all the revalidation failed to stop it.
+      expect(dispatched).toBe(false);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("no rebind is allowed between grant verification and dispatch — a swap right before click fails closed", async () => {
+    const { sculpt, adapter } = await attach(DELETE_BUTTON_HTML);
+    let clickedReplacement = false;
+    const originalCall = adapter.call.bind(adapter);
+    // Simulates a rerender landing in the window between the guard being
+    // attached (right after grant verification) and the click actually
+    // dispatching — without a guard bound to the verified target, the
+    // default resolve path would happily rebind to this "similar enough"
+    // replacement and click it instead.
+    adapter.call = (async (operation: Parameters<typeof originalCall>[0]) => {
+      if ("op" in operation && operation.op === "click") {
+        adapter.document.getElementById("container")!.innerHTML =
+          '<button id="delete-btn-2" type="button">Delete account</button>';
+        adapter.document.getElementById("delete-btn-2")?.addEventListener("click", () => {
+          clickedReplacement = true;
+        });
+      }
+      return originalCall(operation);
+    }) as typeof adapter.call;
+
+    try {
+      const button = await sculpt.ui.button({ name: "Delete account" });
+      const grant = await grantFor(sculpt, button.identity.id);
+
+      const result = await button.click({ confirmation: grant, recovery: { retryLimit: 0 } });
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("TARGET_STALE");
+      expect(clickedReplacement).toBe(false);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("a valid grant survives a retryable precondition failure instead of being reported as reused", async () => {
+    const HTML = `<!doctype html><html><body>
+      <button id="delete-btn" type="button" style="display:none">Delete account</button>
+    </body></html>`;
+    const { sculpt } = await attach(HTML);
+    try {
+      const button = await sculpt.ui.button({ name: "Delete account" });
+      const grant = await grantFor(sculpt, button.identity.id);
+
+      // Stays hidden through every retry attempt. Before the fix, the risk
+      // gate re-ran on each attempt: attempt 1 verified and consumed the
+      // grant, the retryable TARGET_NOT_VISIBLE failure sent it around
+      // again, and attempt 2 re-verified the *same* grant only to find it
+      // already consumed — masking the real precondition failure behind a
+      // spurious CONFIRMATION_GRANT_INVALID("reused"). The real failure the
+      // caller should see is the ordinary visibility precondition.
+      const result = await button.click({ confirmation: grant, recovery: { retryLimit: 2 } });
+      expect(result.ok).toBe(false);
       expect(result.error?.code).toBe("TARGET_NOT_VISIBLE");
     } finally {
       await sculpt.dispose();

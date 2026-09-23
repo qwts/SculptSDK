@@ -49,6 +49,9 @@ export interface SemanticAttachOptions {
    * `"recovery_or_advisory"` (the deterministic floor decides alone).
    * Defaults to advisory. */
   dp7RiskDegradation?: DegradationClass;
+  /** Bounds the #25 session-scoped decision evidence cache. Defaults to the
+   * runtime's own default (100) when omitted. */
+  decisionCacheMaxEntries?: number;
 }
 
 export interface SemanticPointConfig<TFallback, TAccepted> {

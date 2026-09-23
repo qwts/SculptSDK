@@ -230,6 +230,16 @@ describe("DP-1: the redacted-state digest covers the full outbound payload", () 
 
     expect(a.record.redactedStateDigest).not.toBe(b.record.redactedStateDigest);
   });
+
+  it("is a collision-resistant SHA-256 hex digest — it gates #25 cache-key correctness, not just logging", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider });
+
+    const { record } = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(record.redactedStateDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe("DP-1: confidence gating never falls back off a present distribution", () => {

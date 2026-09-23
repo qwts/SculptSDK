@@ -1,6 +1,6 @@
 import { normalizeText } from "../types/matchers.js";
 import type { FormFillResult, FormValidationError, FilledField } from "../types/actions.js";
-import type { FormFieldSummary } from "../types/snapshot.js";
+import type { FormFieldSummary, FormMaterialField, FormMaterialSnapshot } from "../types/snapshot.js";
 import type { UIKind } from "../types/kinds.js";
 import type { KernelContext } from "./context.js";
 import { getAccessibleName, visibleText } from "./ax.js";
@@ -175,13 +175,75 @@ export function summarizeFields(ctx: KernelContext, form: Element): FormFieldSum
   });
 }
 
+/** Every control `formControls` excludes because it isn't something a host
+ * fills by label — hidden inputs carry material state (an id, an amount, a
+ * recipient) all the same, so a #27 material digest built only from
+ * `summarizeFields` never notices one changing. `submit`/`button`/`reset`/
+ * `image` are excluded here too: they carry no state of their own, only the
+ * target already covered by `targetDigest`. */
+function hiddenMaterialControls(form: Element): Element[] {
+  const native = (form as HTMLFormElement).elements;
+  const source = native ? Array.from(native) : Array.from(form.querySelectorAll("input[type=hidden]"));
+  return source.filter((el) => {
+    if (el.tagName.toLowerCase() !== "input") return false;
+    return ((el as HTMLInputElement).getAttribute("type") ?? "text").toLowerCase() === "hidden";
+  });
+}
+
+function toMaterialField(el: Element): FormMaterialField {
+  const tag = el.tagName.toLowerCase();
+  return {
+    name: el.getAttribute("name") ?? "",
+    id: el.getAttribute("id") ?? "",
+    type: tag === "input" ? ((el as HTMLInputElement).getAttribute("type") ?? "text").toLowerCase() : tag,
+    value: summarizeValue(el)
+  };
+}
+
+/**
+ * Everything a `submit` actually posts (#27): every visible/fillable field
+ * plus the hidden ones `formControls` deliberately excludes, plus the
+ * form's own `action`/`method` — a page can change a hidden account id, a
+ * hidden amount, or retarget the form entirely without touching anything a
+ * human reviewer could see, and none of that would show up in
+ * `summarizeFields` alone. Keyed by `name`/`id`, not by label — a hidden
+ * field has no visible label to key by.
+ */
+export function materialSnapshot(ctx: KernelContext, form: Element): FormMaterialSnapshot {
+  const visible = formControls(form).map(toMaterialField);
+  const hidden = hiddenMaterialControls(form).map(toMaterialField);
+  const htmlForm = form as HTMLFormElement;
+  return {
+    fields: [...visible, ...hidden],
+    action: htmlForm.getAttribute("action") ?? "",
+    method: (htmlForm.getAttribute("method") ?? "get").toLowerCase()
+  };
+}
+
+/** Sync fingerprint for a password value — never the plaintext itself, but
+ * sensitive to it, so a material digest built over form fields (#27) can
+ * detect a changed password instead of every non-empty password collapsing
+ * to the same fixed placeholder. `crypto.subtle` is async and this must stay
+ * sync (it runs inline with every other field's summary), so this is a
+ * plain, non-cryptographic mixing function — adequate here because the raw
+ * password never leaves the browser and this fingerprint only ever becomes
+ * one field inside the outer, cryptographically strong material digest
+ * (`computeFormValuesDigest`), never a value compared on its own. */
+function fingerprintPassword(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0;
+  }
+  return `•••:${(hash >>> 0).toString(16)}`;
+}
+
 function summarizeValue(el: Element): string | undefined {
   const tag = el.tagName.toLowerCase();
   if (tag === "input") {
     const input = el as HTMLInputElement;
     const type = (input.getAttribute("type") ?? "text").toLowerCase();
     if (type === "checkbox" || type === "radio") return String(input.checked);
-    if (type === "password") return input.value ? "•••" : "";
+    if (type === "password") return input.value ? fingerprintPassword(input.value) : "";
     return input.value || undefined;
   }
   if (tag === "select" || tag === "textarea") return (el as HTMLSelectElement).value || undefined;
