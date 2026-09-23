@@ -87,3 +87,9 @@ describe("SculptError", () => {
     });
   });
 });
+
+describe("CI smoke check (temporary, proves a red test fails CI — removed in the next commit)", () => {
+  it("DELIBERATELY FAILS", () => {
+    expect(1).toBe(2);
+  });
+});
