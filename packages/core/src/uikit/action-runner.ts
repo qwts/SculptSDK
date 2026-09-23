@@ -4,6 +4,7 @@ import type {
   ActionResult,
   BrowserCapabilities,
   CheckResult,
+  FormFieldSummary,
   InputMode,
   PostconditionExpectation,
   RecoveryStep,
@@ -19,6 +20,7 @@ import type { KernelClient } from "../foundation/kernel-client.js";
 import { SculptError, toSculptError } from "../errors.js";
 import type { SemanticRuntime } from "../semantic/runtime.js";
 import { checkRiskFloor, confirmationRequiredError, type RiskFloorSignals } from "./risk-floor.js";
+import { computeFormValuesDigest, CLICK_MATERIAL_DIGEST, ConsumedGrantRegistry, verifyConfirmationGrant } from "./confirmation-grant.js";
 
 /**
  * Interaction contract engine (§18): every action runs preconditions,
@@ -51,6 +53,9 @@ export interface ActionEnv {
   /** @experimental Semantic Resolution Layer (m0 foundations). No production
    * policy reaches through this in m0 — see #4/#14. */
   semantic: SemanticRuntime;
+  /** #27: single-use confirmation grants consumed while clearing a #26 risk
+   * floor hit — scoped to this attachment, cleared on `dispose()`. */
+  consumedGrants: ConsumedGrantRegistry;
 }
 
 export interface ActionSpec {
@@ -69,6 +74,14 @@ let actionCounter = 0;
 
 function nextActionId(): string {
   return `act_${Date.now().toString(36)}_${(++actionCounter).toString(36)}`;
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
 }
 
 const PRECONDITION_DEFAULTS: Required<ActionPreconditions> = {
@@ -216,13 +229,46 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
 
       // #26: the deterministic risk floor — click/submit only, no provider,
       // nothing that could be gamed by a later answer. Checked before
-      // preconditions/dispatch; a match throws CONFIRMATION_REQUIRED, which
-      // is non-retryable (see CODE_TRAITS), so the loop below breaks
-      // immediately rather than retrying past it.
+      // preconditions/dispatch. A match throws CONFIRMATION_REQUIRED unless
+      // options.confirmation carries a grant that verifies clean for this
+      // exact action/target/document/material state (#27) — either way the
+      // thrown error is non-retryable (see CODE_TRAITS), so the loop below
+      // breaks immediately rather than retrying past it.
       if (env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
         const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
         const matched = checkRiskFloor(signals);
-        if (matched) throw confirmationRequiredError(matched, summary);
+        if (matched) {
+          const grant = options.confirmation;
+          if (!grant) throw confirmationRequiredError(matched, summary);
+
+          const actionType = spec.action as "click" | "submit";
+          const evidence = await env.foundation.observers.evidence();
+          const route = await env.foundation.observers.routeState();
+          const materialDigest =
+            actionType === "submit"
+              ? computeFormValuesDigest((await env.kernel.call<{ fields: FormFieldSummary[] }>("formFields", { target })).fields)
+              : CLICK_MATERIAL_DIGEST;
+
+          const verification = verifyConfirmationGrant(
+            grant,
+            {
+              actionType,
+              targetDigest: resolution.identity.id,
+              rebound: resolution.rebound !== null,
+              documentId: evidence.documentId,
+              navigationEpoch: evidence.navigationEpoch,
+              origin: safeOrigin(route.url),
+              materialDigest,
+              riskDecision: matched,
+              now: Date.now()
+            },
+            env.consumedGrants.has(grant.grantId)
+          );
+          if (!verification.ok) throw verification.error;
+          // Consumed the instant it clears the floor — regardless of
+          // whether the action goes on to succeed for an unrelated reason.
+          env.consumedGrants.consume(grant.grantId);
+        }
       }
 
       let visibility = await env.foundation.layout.visible(target);

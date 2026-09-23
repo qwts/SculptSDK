@@ -16,7 +16,7 @@ import type {
 import { applySettings, assertCapability, resolveSettings } from "./capability/index.js";
 import { SculptError } from "./errors.js";
 import { createFoundation, KernelClient, type FoundationLayer } from "./foundation/index.js";
-import { DEFAULT_ORCHESTRATION, UIRoot, type ActionEnv, type OrchestrationDefaults } from "./uikit/index.js";
+import { ConsumedGrantRegistry, DEFAULT_ORCHESTRATION, UIRoot, type ActionEnv, type OrchestrationDefaults } from "./uikit/index.js";
 import { AgentOrchestrator } from "./orchestration/executor.js";
 import { ModelContext } from "./orchestration/model-context.js";
 import { KERNEL_SOURCE } from "./generated/kernel-source.js";
@@ -41,6 +41,7 @@ export class Sculpt {
   readonly model: ModelContext;
   private readonly orchestrator: AgentOrchestrator;
   private readonly semantic: SemanticRuntime;
+  private readonly consumedGrants: ConsumedGrantRegistry;
 
   private constructor(
     private readonly adapter: RuntimeAdapter,
@@ -54,6 +55,7 @@ export class Sculpt {
     this.orchestrator = new AgentOrchestrator(env, this.ui, adapter);
     this.model = new ModelContext(env, this.orchestrator);
     this.semantic = env.semantic;
+    this.consumedGrants = env.consumedGrants;
   }
 
   static async attach(options: SculptAttachOptions): Promise<Sculpt> {
@@ -90,7 +92,8 @@ export class Sculpt {
       redactionRules: options.semantic?.redactionRules,
       calibration: options.semantic?.calibration
     });
-    const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic };
+    const consumedGrants = new ConsumedGrantRegistry();
+    const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic, consumedGrants };
     return new Sculpt(adapter, settings, capabilities, kernel, foundation, env);
   }
 
@@ -150,6 +153,7 @@ export class Sculpt {
 
   async dispose(): Promise<void> {
     this.semantic.dispose();
+    this.consumedGrants.clear();
     await this.adapter.dispose();
   }
 }

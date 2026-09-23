@@ -17,6 +17,7 @@ export type SculptErrorCode =
   | "FRAMEWORK_ADAPTER_FAILED"
   | "NETWORK_OBSERVATION_UNAVAILABLE"
   | "CONFIRMATION_REQUIRED"
+  | "CONFIRMATION_GRANT_INVALID"
   | "UNKNOWN";
 
 export type SculptLayer = "runtime" | "foundation" | "uikit" | "orchestration";
@@ -42,6 +43,9 @@ const CODE_TRAITS: Record<SculptErrorCode, { recoverable: boolean; retryable: bo
   // retryable — the deterministic risk floor is sticky, so retrying the
   // exact same action can never get past it on its own.
   CONFIRMATION_REQUIRED: { recoverable: true, retryable: false },
+  // #27: recoverable (the host can obtain and pass a fresh, valid grant) but
+  // never retryable — replaying the exact same rejected grant can't succeed.
+  CONFIRMATION_GRANT_INVALID: { recoverable: true, retryable: false },
   UNKNOWN: { recoverable: false, retryable: false }
 };
 

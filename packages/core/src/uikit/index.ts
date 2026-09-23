@@ -28,6 +28,15 @@ import { DP1_POINT, DP1_RECALL_CAP, resolveDisambiguation, type SemanticDecision
 
 export { runAction, syntheticResult, DEFAULT_ORCHESTRATION } from "./action-runner.js";
 export type { ActionEnv, OrchestrationDefaults, ActionSpec } from "./action-runner.js";
+export {
+  computeFormValuesDigest,
+  confirmationGrantInvalidError,
+  verifyConfirmationGrant,
+  ConsumedGrantRegistry,
+  CLICK_MATERIAL_DIGEST,
+  RISK_FLOOR_POLICY_VERSION
+} from "./confirmation-grant.js";
+export type { GrantInvalidReason, GrantVerificationContext } from "./confirmation-grant.js";
 
 /**
  * UIKit layer (§16): semantic UI objects with typed interactions, built on
