@@ -127,4 +127,85 @@ describe("DP-1 disambiguation on a real kernel tie (duplicate Save in page and d
     }
     expect(acceptedName).toBe("Save");
   });
+
+  it("never sends the URL hash fragment (can carry an OAuth token) as DP-1 route state", async () => {
+    let capturedRoute: string | undefined;
+    const provider = stubProvider(async (request) => {
+      capturedRoute = (request.redactedState as { route: string }).route;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({
+      html: DUPLICATE_SAVE_HTML,
+      url: `${ORIGIN}/edit#access_token=super-secret-token`
+    });
+    const sculpt = await Sculpt.attach({ adapter, authority: { semanticResolution: "enabled" }, semantic: { provider } });
+    try {
+      await expect(sculpt.ui.find({ kind: "button", name: "Save" })).rejects.toMatchObject({ code: "TARGET_AMBIGUOUS" });
+    } finally {
+      await sculpt.dispose();
+    }
+    expect(capturedRoute).toBeDefined();
+    expect(capturedRoute).not.toContain("access_token");
+    expect(capturedRoute).not.toContain("#");
+    expect(capturedRoute).toBe("/edit");
+  });
+});
+
+describe("DP-1 disambiguation: an unverifiable predicate on a `within` container propagates to its children", () => {
+  const TIE_INSIDE_UNVERIFIABLE_REGION_HTML = `<!doctype html><html><body>
+    <div role="dialog" aria-label="Confirm changes">
+      <button id="dialog-save-1" type="button">Save</button>
+      <button id="dialog-save-2" type="button">Save</button>
+    </div>
+  </body></html>`;
+
+  it("never spends a semantic call on a tie found inside a container whose own region predicate is unverifiable", async () => {
+    let called = false;
+    const provider = stubProvider(async (request) => {
+      called = true;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: TIE_INSIDE_UNVERIFIABLE_REGION_HTML, url: `${ORIGIN}/` });
+    const sculpt = await Sculpt.attach({
+      adapter,
+      authority: { semanticResolution: "enabled" },
+      semantic: { provider, calibration: new StaticCalibrationRegistry([THRESHOLD]) }
+    });
+    try {
+      // happy-dom reports an all-zero bounding rect, so the dialog's own
+      // `region: "top"` predicate can never be conclusively verified — and
+      // that gap must propagate to both "Save" buttons found inside it.
+      await expect(
+        sculpt.ui.find({ kind: "button", name: "Save", within: { role: "dialog", region: "top" } })
+      ).rejects.toMatchObject({ code: "TARGET_AMBIGUOUS" });
+    } finally {
+      await sculpt.dispose();
+    }
+    expect(called).toBe(false); // I9: never spend a call it can't act on
+  });
+});
+
+describe("DP-1 disambiguation: a tied set wider than the tie-detection query's own limit", () => {
+  const SIX_WAY_TIE_HTML = `<!doctype html><html><body>
+    ${Array.from({ length: 6 }, (_, i) => `<button id="save-${i}" type="button">Save</button>`).join("\n")}
+  </body></html>`;
+
+  it("still sees every tied candidate as a DP-1 option, not just the first 5", async () => {
+    let optionCount: number | undefined;
+    const provider = stubProvider(async (request) => {
+      const options = (request.questions[0] as { options: string[] }).options;
+      optionCount = options.filter((o) => o !== "none").length;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: SIX_WAY_TIE_HTML, url: `${ORIGIN}/` });
+    const sculpt = await Sculpt.attach({ adapter, authority: { semanticResolution: "enabled" }, semantic: { provider } });
+    try {
+      await expect(sculpt.ui.find({ kind: "button", name: "Save" })).rejects.toMatchObject({ code: "TARGET_AMBIGUOUS" });
+    } finally {
+      await sculpt.dispose();
+    }
+    expect(optionCount).toBe(6);
+  });
 });

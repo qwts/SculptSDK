@@ -6,10 +6,12 @@
  * the kernel already admitted. Recall (opt-in, on a miss) is #24.
  */
 import type { OperationBudget } from "../budget.js";
+import type { KernelEvidence } from "../../types/evidence.js";
 import type { QueryCandidate } from "../../types/queries.js";
+import type { FreshnessEvidence } from "../freshness.js";
 import { buildCandidateSummaryDTO, type CandidateSummaryDTO } from "../redaction.js";
 import { checkModelSupport, type ChoiceQuestion, type DecisionPoint, type DecisionRequest } from "../provider.js";
-import type { SemanticDecisionRecord } from "../records.js";
+import type { GatedMetric, SemanticDecisionRecord } from "../records.js";
 import type { SemanticRuntime } from "../runtime.js";
 import type { QuestionOutcome } from "../validate.js";
 
@@ -40,7 +42,12 @@ export interface Dp1DisambiguationOptions {
    * redactor before being sent, same as any other outbound string. */
   intent: string;
   routePath: string;
-  documentEvidence: { documentId: string; navigationEpoch: number };
+  documentEvidence: KernelEvidence;
+  /** Re-fetches current kernel evidence for the freshness comparison against
+   * `documentEvidence` (ADR-0008), called only once an answer would
+   * otherwise be accepted. Omitted disables the freshness check for this
+   * call, e.g. in tests that don't model navigation. */
+  checkFreshness?: () => Promise<KernelEvidence>;
   operationId?: string;
   budget?: OperationBudget;
 }
@@ -119,13 +126,29 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
       runtime.redactor
     )
   );
-  const redactedStateDigest = djb2(JSON.stringify(redactedState));
   const intent = runtime.redactor.text(options.intent) ?? options.intent;
   const routePath = runtime.redactor.text(options.routePath) ?? options.routePath;
+  // §16: the digest must cover exactly the payload sent (`redactedState`
+  // below), not just the candidate array — otherwise two requests that
+  // differ only in intent/route can collide on the same digest.
+  const redactedStateDigest = djb2(JSON.stringify({ candidates: redactedState, intent, route: routePath }));
 
   const question: ChoiceQuestion = { kind: "choice", id: "target", options: optionIds };
   let capturedOutcomes: QuestionOutcome[] = [];
   let acceptedTargetId: string | undefined;
+  let gatedThreshold: number | undefined;
+  let gatedMetric: GatedMetric | undefined;
+
+  const capturedEvidence: FreshnessEvidence = {
+    documentId: options.documentEvidence.documentId,
+    navigationEpoch: options.documentEvidence.navigationEpoch,
+    frameId: options.documentEvidence.frameId,
+    candidateSetDigest
+  };
+  // §2's DP-1 timeout budget: only spend it when the caller didn't already
+  // share a budget with us — a nested call inherits the operation's own
+  // deadline instead of shortening it to 800ms.
+  const budget = options.budget ?? runtime.createOperationBudget({ maxOperationMs: 800 });
 
   const result = await runtime.evaluate(
     {
@@ -146,7 +169,7 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
           navigationEpoch: options.documentEvidence.navigationEpoch,
           candidateSetDigest,
           redactedStateDigest,
-          deadline: Date.now() + 800, // §2's DP-1 timeout budget
+          deadline: Date.now() + 800, // overwritten by the runtime with `budget.deadline`
           signal: new AbortController().signal
         },
         questions: [question],
@@ -156,7 +179,8 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
         capturedOutcomes = outcomes;
         const accepted = outcomes.find((o) => o.status === "accepted");
         if (accepted?.accepted?.answer.kind !== "choice") return undefined;
-        const selected = accepted.accepted.answer.selected;
+        const answer = accepted.accepted.answer;
+        const selected = answer.selected;
         if (selected === "none" || !optionIds.includes(selected)) return undefined;
 
         // §21 (not built in m1): without a matching calibration artifact,
@@ -172,12 +196,25 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
           mode
         });
         if (!threshold) return undefined;
-        const confidence = accepted.accepted.selectedOptionProbability ?? accepted.accepted.providerConfidence ?? 0;
+        // A distribution, when present, is the metric of record (I7): a
+        // selected option missing from it means zero mass on that option,
+        // never a silent fallback to the answer's overall confidence.
+        const metric: GatedMetric = answer.distribution !== undefined ? "selectedOptionProbability" : "providerConfidence";
+        const confidence = metric === "selectedOptionProbability" ? (accepted.accepted.selectedOptionProbability ?? 0) : (accepted.accepted.providerConfidence ?? 0);
+        gatedThreshold = threshold.minConfidence;
+        gatedMetric = metric;
         if (confidence < threshold.minConfidence) return undefined;
         return selected;
-      }
+      },
+      capturedEvidence,
+      checkFreshness: options.checkFreshness
+        ? async () => {
+            const current = await options.checkFreshness!();
+            return { documentId: current.documentId, navigationEpoch: current.navigationEpoch, frameId: current.frameId, candidateSetDigest };
+          }
+        : undefined
     },
-    { budget: options.budget }
+    { budget }
   );
 
   if (result.kind === "accepted") acceptedTargetId = result.value;
@@ -203,7 +240,8 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
               : result.reason.code === "invalid_answer"
                 ? "invalid"
                 : "unavailable",
-    threshold: undefined,
+    threshold: gatedThreshold,
+    gatedMetric,
     latencyMs: Date.now() - startedAt,
     error: result.kind !== "accepted" && result.kind !== "disabled" ? { code: result.reason.code, message: result.reason.detail ?? "" } : undefined
   };

@@ -55,7 +55,7 @@ function baseOptions(runtime: SemanticRuntime, tied: QueryCandidate[]) {
     tied,
     intent: "find a button named like \"Save\"",
     routePath: "/edit",
-    documentEvidence: { documentId: "doc-1", navigationEpoch: 0 }
+    documentEvidence: { documentId: "doc-1", navigationEpoch: 0, frameId: "main" as const }
   };
 }
 
@@ -166,6 +166,161 @@ describe("DP-1: every failure class abstains rather than accepting", () => {
     const { acceptedTargetId, record } = await resolveDisambiguation(baseOptions(runtime, tied));
     expect(acceptedTargetId).toBeUndefined();
     expect(record.status).toBe("abstained");
+  });
+});
+
+describe("DP-1: freshness binding (ADR-0008)", () => {
+  it("rejects an otherwise-acceptable answer when checkFreshness reports the page moved on", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { acceptedTargetId, record } = await resolveDisambiguation({
+      ...baseOptions(runtime, tied),
+      checkFreshness: async () => ({ documentId: "doc-1", navigationEpoch: 1, frameId: "main" })
+    });
+
+    expect(acceptedTargetId).toBeUndefined();
+    expect(record.status).toBe("stale");
+  });
+
+  it("accepts when checkFreshness confirms nothing changed", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { acceptedTargetId, record } = await resolveDisambiguation({
+      ...baseOptions(runtime, tied),
+      checkFreshness: async () => ({ documentId: "doc-1", navigationEpoch: 0, frameId: "main" })
+    });
+
+    expect(acceptedTargetId).toBe("t1");
+    expect(record.status).toBe("accepted");
+  });
+});
+
+describe("DP-1: the redacted-state digest covers the full outbound payload", () => {
+  it("differs when only the intent sentence changes, same tied set", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider });
+
+    const a = await resolveDisambiguation(baseOptions(runtime, tied));
+    const b = await resolveDisambiguation({ ...baseOptions(runtime, tied), intent: "find a totally different element" });
+
+    expect(a.record.redactedStateDigest).not.toBe(b.record.redactedStateDigest);
+  });
+
+  it("differs when only the route changes, same tied set and intent", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider });
+
+    const a = await resolveDisambiguation(baseOptions(runtime, tied));
+    const b = await resolveDisambiguation({ ...baseOptions(runtime, tied), routePath: "/somewhere-else" });
+
+    expect(a.record.redactedStateDigest).not.toBe(b.record.redactedStateDigest);
+  });
+});
+
+describe("DP-1: confidence gating never falls back off a present distribution", () => {
+  it("a distribution present but missing the selected option's key reads as zero, not providerConfidence", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => ({
+      answers: [
+        {
+          kind: "choice" as const,
+          questionId: "target",
+          selected: "t1",
+          providerConfidence: 0.95,
+          // "t1" itself is absent from the distribution — only "t2" carries mass.
+          distribution: { t2: 1 }
+        }
+      ]
+    }));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { acceptedTargetId, record } = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(acceptedTargetId).toBeUndefined();
+    expect(record.status).toBe("abstained");
+  });
+});
+
+describe("DP-1: records the threshold and metric that actually gated the decision", () => {
+  it("populates threshold/gatedMetric on acceptance", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { record } = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(record.threshold).toBe(THRESHOLD.minConfidence);
+    expect(record.gatedMetric).toBe("providerConfidence");
+  });
+
+  it("populates threshold/gatedMetric even when the answer falls below it", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.1));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { record } = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(record.threshold).toBe(THRESHOLD.minConfidence);
+    expect(record.gatedMetric).toBe("providerConfidence");
+  });
+
+  it("leaves threshold/gatedMetric unset when no calibration artifact exists (shadow mode)", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => acceptedAnswerFor("t1", 0.9));
+    const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider });
+
+    const { record } = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(record.threshold).toBeUndefined();
+    expect(record.gatedMetric).toBeUndefined();
+  });
+});
+
+describe("DP-1: the 800ms timeout budget is real, not dead code", () => {
+  it("without a shared budget, the request deadline is bound to ~800ms, not the runtime's 2000ms default", async () => {
+    let observedDeadline: number | undefined;
+    const startedAt = Date.now();
+    const provider = stubProvider(async (request) => {
+      observedDeadline = request.evidence.deadline;
+      return acceptedAnswerFor("t1", 0.9);
+    });
+    const tied = [candidate("t1"), candidate("t2")];
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(observedDeadline).toBeDefined();
+    expect(observedDeadline! - startedAt).toBeLessThan(1500); // well under the runtime's 2000ms default
   });
 });
 
