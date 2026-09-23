@@ -21,6 +21,7 @@
     "typecheck": "node scripts/build-kernel.mjs && tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^22.20.4",
     "esbuild": "^0.24.2",
     "typescript": "^5.6.3"
   }

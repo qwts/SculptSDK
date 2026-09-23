@@ -162,27 +162,55 @@ describe("computeFormValuesDigest", () => {
     const b = computeFormValuesDigest([{ targetId: "t1", label: "Amount", kind: "input", required: true, value: "1000" }]);
     expect(a).not.toBe(b);
   });
+
+  it("is a collision-resistant SHA-256 hex digest — the 32-bit djb2 this replaced collided on real inputs", () => {
+    // "1r" and "30" both hashed to the same 32-bit djb2 value (d60932c8) —
+    // this is the exact case the review flagged as a forgeable material
+    // digest for a security binding.
+    const a = computeFormValuesDigest([{ targetId: "t1", label: "Code", kind: "input", required: true, value: "1r" }]);
+    const b = computeFormValuesDigest([{ targetId: "t1", label: "Code", kind: "input", required: true, value: "30" }]);
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
 });
 
 describe("ConsumedGrantRegistry", () => {
+  const future = Date.now() + 60_000;
+  const past = Date.now() - 60_000;
+
   it("has() is false before consume(), true after", () => {
     const registry = new ConsumedGrantRegistry();
     expect(registry.has("g1")).toBe(false);
-    registry.consume("g1");
+    registry.consume("g1", future);
     expect(registry.has("g1")).toBe(true);
   });
 
   it("clear() forgets everything", () => {
     const registry = new ConsumedGrantRegistry();
-    registry.consume("g1");
+    registry.consume("g1", future);
     registry.clear();
     expect(registry.has("g1")).toBe(false);
     expect(registry.size).toBe(0);
   });
 
-  it("is bounded — never grows past maxEntries", () => {
+  it("retains still-valid entries past maxEntries — a valid grant is never evicted just to make room", () => {
     const registry = new ConsumedGrantRegistry(5);
-    for (let i = 0; i < 50; i++) registry.consume(`g${i}`);
-    expect(registry.size).toBe(5);
+    for (let i = 0; i < 50; i++) registry.consume(`g${i}`, future);
+    expect(registry.size).toBe(50);
+    expect(registry.has("g0")).toBe(true);
+    expect(registry.has("g49")).toBe(true);
+  });
+
+  it("sweeps already-expired entries once the registry grows past maxEntries", () => {
+    const registry = new ConsumedGrantRegistry(5);
+    for (let i = 0; i < 5; i++) registry.consume(`expired-${i}`, past);
+    // The 6th consume crosses maxEntries, triggering a sweep right in that
+    // same call — the 5 already-expired entries are dropped, the still-valid
+    // one (an unrelated grant consumed around the same time) survives
+    // regardless of insertion order.
+    registry.consume("still-valid", future);
+    expect(registry.size).toBe(1);
+    for (let i = 0; i < 5; i++) expect(registry.has(`expired-${i}`)).toBe(false);
+    expect(registry.has("still-valid")).toBe(true);
   });
 });

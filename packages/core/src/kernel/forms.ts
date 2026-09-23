@@ -175,13 +175,30 @@ export function summarizeFields(ctx: KernelContext, form: Element): FormFieldSum
   });
 }
 
+/** Sync fingerprint for a password value — never the plaintext itself, but
+ * sensitive to it, so a material digest built over form fields (#27) can
+ * detect a changed password instead of every non-empty password collapsing
+ * to the same fixed placeholder. `crypto.subtle` is async and this must stay
+ * sync (it runs inline with every other field's summary), so this is a
+ * plain, non-cryptographic mixing function — adequate here because the raw
+ * password never leaves the browser and this fingerprint only ever becomes
+ * one field inside the outer, cryptographically strong material digest
+ * (`computeFormValuesDigest`), never a value compared on its own. */
+function fingerprintPassword(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0;
+  }
+  return `•••:${(hash >>> 0).toString(16)}`;
+}
+
 function summarizeValue(el: Element): string | undefined {
   const tag = el.tagName.toLowerCase();
   if (tag === "input") {
     const input = el as HTMLInputElement;
     const type = (input.getAttribute("type") ?? "text").toLowerCase();
     if (type === "checkbox" || type === "radio") return String(input.checked);
-    if (type === "password") return input.value ? "•••" : "";
+    if (type === "password") return input.value ? fingerprintPassword(input.value) : "";
     return input.value || undefined;
   }
   if (tag === "select" || tag === "textarea") return (el as HTMLSelectElement).value || undefined;
