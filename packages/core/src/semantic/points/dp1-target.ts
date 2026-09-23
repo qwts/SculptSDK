@@ -6,6 +6,7 @@
  * with text matchers dropped (`mode: "miss"`, #24) — DP-1 never widens the
  * candidate set beyond what the kernel already admitted for that mode.
  */
+import { createHash } from "node:crypto";
 import type { OperationBudget } from "../budget.js";
 import type { CachedDecision, DecisionCacheKey } from "../cache.js";
 import type { KernelEvidence } from "../../types/evidence.js";
@@ -67,12 +68,14 @@ export interface Dp1DisambiguationResult {
   record: SemanticDecisionRecord;
 }
 
-function djb2(input: string): string {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i++) {
-    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(16);
+/** SHA-256, not a fast non-cryptographic hash: `redactedStateDigest` is part
+ * of the #25 decision-cache key (`DecisionCacheKey`), so a collision here
+ * means the cache can hand back a decision made for a different intent,
+ * route, or candidate set. A 32-bit hash (djb2, used here before) is
+ * trivially collidable by construction and must never gate cache
+ * correctness like this. */
+function digest(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
 /**
@@ -139,7 +142,7 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
   // §16: the digest must cover exactly the payload sent (`redactedState`
   // below), not just the candidate array — otherwise two requests that
   // differ only in intent/route can collide on the same digest.
-  const redactedStateDigest = djb2(JSON.stringify({ candidates: redactedState, intent, route: routePath }));
+  const redactedStateDigest = digest(JSON.stringify({ candidates: redactedState, intent, route: routePath }));
 
   // §21 (not built in m1): the threshold actually in effect for this exact
   // (model, policy/question version, mode) — computed once, both for the
