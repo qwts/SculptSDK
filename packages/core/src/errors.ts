@@ -16,6 +16,7 @@ export type SculptErrorCode =
   | "SHADOW_ROOT_CLOSED"
   | "FRAMEWORK_ADAPTER_FAILED"
   | "NETWORK_OBSERVATION_UNAVAILABLE"
+  | "CONFIRMATION_REQUIRED"
   | "UNKNOWN";
 
 export type SculptLayer = "runtime" | "foundation" | "uikit" | "orchestration";
@@ -37,6 +38,10 @@ const CODE_TRAITS: Record<SculptErrorCode, { recoverable: boolean; retryable: bo
   SHADOW_ROOT_CLOSED: { recoverable: false, retryable: false },
   FRAMEWORK_ADAPTER_FAILED: { recoverable: true, retryable: false },
   NETWORK_OBSERVATION_UNAVAILABLE: { recoverable: false, retryable: false },
+  // #26: recoverable (a confirmation grant, #27, can clear it) but never
+  // retryable — the deterministic risk floor is sticky, so retrying the
+  // exact same action can never get past it on its own.
+  CONFIRMATION_REQUIRED: { recoverable: true, retryable: false },
   UNKNOWN: { recoverable: false, retryable: false }
 };
 

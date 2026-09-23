@@ -18,6 +18,7 @@ import type { FoundationLayer, KernelTarget, Resolution } from "../foundation/in
 import type { KernelClient } from "../foundation/kernel-client.js";
 import { SculptError, toSculptError } from "../errors.js";
 import type { SemanticRuntime } from "../semantic/runtime.js";
+import { checkRiskFloor, confirmationRequiredError, type RiskFloorSignals } from "./risk-floor.js";
 
 /**
  * Interaction contract engine (§18): every action runs preconditions,
@@ -62,6 +63,28 @@ export interface ActionSpec {
   /** Form scope for expectNoValidationErrors. */
   validationScope?: KernelTarget;
   onResolved?: (resolution: Resolution) => void;
+}
+
+/**
+ * #26's deterministic risk floor, callable outside the `runAction` retry
+ * loop. `UIForm.fill(values, { submit: true })` needs this: `formFill`
+ * writes values and dispatches `input`/`change` events *before* `submit()`
+ * ever runs, and a page's own handlers for those events could alter the
+ * form's action/text/name in response — checking only post-fill (inside
+ * `submit()`) risks seeing a state a page has already laundered from risky
+ * to benign. Callers that go through `runAction` still get their own
+ * post-resolution check too; this one covers the state before any mutation
+ * this call is about to make.
+ */
+export async function checkRiskFloorForTarget(
+  env: ActionEnv,
+  target: KernelTarget,
+  summary: TargetSummary | undefined
+): Promise<void> {
+  if (!env.semantic.enabled) return;
+  const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
+  const matched = checkRiskFloor(signals);
+  if (matched) throw confirmationRequiredError(matched, summary);
 }
 
 let actionCounter = 0;
@@ -212,6 +235,17 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       target = { targetId: resolution.summary.targetId, identity: resolution.identity, guard: target.guard };
       summary = resolution.summary;
       spec.onResolved?.(resolution);
+
+      // #26: the deterministic risk floor — click/submit only, no provider,
+      // nothing that could be gamed by a later answer. Checked before
+      // preconditions/dispatch; a match throws CONFIRMATION_REQUIRED, which
+      // is non-retryable (see CODE_TRAITS), so the loop below breaks
+      // immediately rather than retrying past it.
+      if (env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
+        const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
+        const matched = checkRiskFloor(signals);
+        if (matched) throw confirmationRequiredError(matched, summary);
+      }
 
       let visibility = await env.foundation.layout.visible(target);
       if (

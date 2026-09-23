@@ -409,3 +409,49 @@ export function describeNode(ctx: KernelContext, el: Element): DomNode {
     inShadowRoot: shadowHostOf(el.getRootNode?.()) !== null
   };
 }
+
+export interface RiskSignals {
+  accessibleName?: string;
+  text?: string;
+  /** The effective `action` a submit of this target's form would post to.
+   * Resolution order matches the HTML form-association algorithm, not just
+   * DOM nesting: the target's own `formaction` (a submit button overriding
+   * its form) wins; then its *owner* form — the form named by its own
+   * `form` attribute if it has one (a control doesn't have to be a
+   * descendant of the form it submits), else its nearest ancestor form. */
+  formAction?: string;
+  /** A link's own destination — a click never goes through a form at all,
+   * so `formAction` alone misses a risky navigation like `<a
+   * href="/account/delete">Continue</a>` with benign visible text. */
+  href?: string;
+}
+
+/** The form this control actually submits, which is not always an ancestor:
+ * a `form="id"` attribute associates a control with a form anywhere in the
+ * document, overriding ordinary DOM nesting (HTML "form owner" algorithm). */
+function ownerForm(el: Element): Element | null {
+  const formAttr = el.getAttribute("form");
+  if (formAttr) {
+    const owner = el.ownerDocument.getElementById(formAttr);
+    if (owner?.tagName.toLowerCase() === "form") return owner;
+  }
+  return el.closest("form");
+}
+
+/** Deterministic-risk-floor inputs (#26): accessible name, visible text, form
+ * action, and link href — nothing else, and never a form value. Text is
+ * never truncated here: the floor must see everything a human reviewer
+ * would, not just a prefix (outbound size limits belong to whatever builds
+ * a DTO from this, not to the floor's own matching). */
+export function riskSignals(el: Element): RiskSignals {
+  // A submit button's own `formaction` overrides its form's `action`, but
+  // only when that button is the one actually submitting.
+  const formAction = el.getAttribute("formaction") ?? ownerForm(el)?.getAttribute("action") ?? undefined;
+  const link = el.closest("a");
+  return {
+    accessibleName: getAccessibleName(el) || undefined,
+    text: visibleText(el) || undefined,
+    formAction,
+    href: link?.getAttribute("href") ?? undefined
+  };
+}
