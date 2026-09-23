@@ -23,6 +23,20 @@ export interface SanitizedError {
   message: string;
 }
 
+/**
+ * What freshness evidence (§15, ADR-0008) established for this record.
+ * Browser state is not atomic across asynchronous adapter calls: this states
+ * only what was actually compared, and when — never a guarantee that nothing
+ * else could have changed around it.
+ */
+export interface FreshnessCheck {
+  /** epoch ms when the evidence used to build the request was captured. */
+  evidenceCapturedAt: number;
+  /** epoch ms when that evidence was compared against the page's current state. */
+  checkedAt: number;
+  fresh: boolean;
+}
+
 export interface SemanticDecisionRecord {
   point: DecisionPoint;
   provider: string;
@@ -42,4 +56,7 @@ export interface SemanticDecisionRecord {
   threshold?: number;
   latencyMs: number;
   error?: SanitizedError;
+  /** Present when this decision was bound to freshness evidence (omitted for
+   * a point that isn't about one specific, freshness-sensitive target). */
+  freshness?: FreshnessCheck;
 }

@@ -6,6 +6,7 @@ import type {
   DomNode,
   ElementIdentity,
   InputMode,
+  KernelEvidence,
   KeySequence,
   PageSnapshot,
   RebindResult,
@@ -56,6 +57,18 @@ export class DomGraph {
       limit
     });
     return candidates;
+  }
+
+  /** Like `query`, plus the read-only page evidence (§15) a caller can bind
+   * a decision's freshness to. Additive — `query` above is unchanged. */
+  async queryWithEvidence(
+    query: UIQuery,
+    limit = 10
+  ): Promise<{ candidates: QueryCandidate[]; evidence: KernelEvidence }> {
+    return this.env.kernel.call<{ candidates: QueryCandidate[]; evidence: KernelEvidence }>("query", {
+      query: serializeQuery(query),
+      limit
+    });
   }
 
   async getNode(ref: TargetRef): Promise<DomNode> {
@@ -200,6 +213,11 @@ export class ObserverSystem {
 
   async routeState(): Promise<{ url: string; path: string; hash: string }> {
     return this.env.kernel.call("routeState");
+  }
+
+  /** Read-only page evidence (§15) for a freshness check that doesn't need a query. */
+  async evidence(): Promise<KernelEvidence> {
+    return this.env.kernel.call<KernelEvidence>("evidence");
   }
 
   observeNetwork(handler: RuntimeEventHandler): Subscription {

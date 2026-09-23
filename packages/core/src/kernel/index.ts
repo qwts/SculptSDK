@@ -1,5 +1,6 @@
 import type { TargetSummary } from "../types/refs.js";
 import type { ElementIdentity } from "../types/identity.js";
+import type { KernelEvidence } from "../types/evidence.js";
 import type { WireUIQuery, QueryCandidate } from "../types/queries.js";
 import type { AnyWindow, KernelContext, KernelOptions } from "./context.js";
 import { createContext, KernelError } from "./context.js";
@@ -20,7 +21,9 @@ import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-export const KERNEL_VERSION = "0.1.0";
+// Bumped for §15: query results and the new `evidence` op carry read-only
+// per-injection document identity, a navigation epoch, and a frame id.
+export const KERNEL_VERSION = "0.2.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -98,6 +101,14 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
 
   const el = (args: TargetArg | undefined): Element => resolveTarget(args).el;
 
+  /** Read-only evidence for freshness checks (§15). The kernel is always
+   * injected into the main document; cross-frame evidence isn't tracked yet. */
+  const pageEvidence = (): KernelEvidence => ({
+    documentId: ctx.state.documentId,
+    navigationEpoch: ctx.state.navigationEpoch,
+    frameId: "main"
+  });
+
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const ops: Record<string, (args: any) => unknown | Promise<unknown>> = {
     ping: () => ({ version: KERNEL_VERSION, now: Date.now() }),
@@ -119,8 +130,10 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
         confidence: r.confidence,
         reasons: r.reasons
       }));
-      return { candidates, total: ranked.length };
+      return { candidates, total: ranked.length, evidence: pageEvidence() };
     },
+
+    evidence: () => pageEvidence(),
 
     resolve: (a: TargetArg) => {
       const { el: element, rebound } = resolveTarget(a);

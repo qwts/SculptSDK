@@ -40,6 +40,7 @@ export class Sculpt {
   readonly ui: UIRoot;
   readonly model: ModelContext;
   private readonly orchestrator: AgentOrchestrator;
+  private readonly semantic: SemanticRuntime;
 
   private constructor(
     private readonly adapter: RuntimeAdapter,
@@ -52,6 +53,7 @@ export class Sculpt {
     this.ui = new UIRoot(env);
     this.orchestrator = new AgentOrchestrator(env, this.ui, adapter);
     this.model = new ModelContext(env, this.orchestrator);
+    this.semantic = env.semantic;
   }
 
   static async attach(options: SculptAttachOptions): Promise<Sculpt> {
@@ -142,6 +144,7 @@ export class Sculpt {
   };
 
   async dispose(): Promise<void> {
+    this.semantic.dispose();
     await this.adapter.dispose();
   }
 }

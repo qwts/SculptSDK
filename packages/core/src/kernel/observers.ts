@@ -37,6 +37,7 @@ export function installObservers(ctx: KernelContext): () => void {
     if (route.url !== state.route.url) {
       state.route = route;
       state.routeChangedAt = Date.now();
+      state.navigationEpoch++;
       ctx.emit({ type: "route", data: { ...route, source } });
     }
   };
