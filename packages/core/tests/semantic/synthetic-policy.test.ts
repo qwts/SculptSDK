@@ -3,13 +3,20 @@ import { TestHarnessAdapter } from "@sculptsdk/adapter-testing";
 import { RecordedProvider, RECORDING_FORMAT_VERSION, type DecisionRecordingFile } from "@sculptsdk/adapter-testing";
 import {
   ProviderUnavailableError,
+  Redactor,
   Sculpt,
   SemanticRuntime,
   type DecisionProvider,
   type DecisionRequest,
   type RawDecisionResponse
 } from "@sculptsdk/core";
-import { gatherAdmittedCandidates, runSyntheticPolicy, type SyntheticCandidate } from "./support/synthetic-policy.js";
+import {
+  buildRedactedState,
+  computeRedactedStateDigest,
+  gatherAdmittedCandidates,
+  runSyntheticPolicy,
+  type SyntheticCandidate
+} from "./support/synthetic-policy.js";
 
 /**
  * The synthetic policy consumer (#17): exercises every m0 runtime contract
@@ -336,7 +343,12 @@ describe("synthetic policy — RecordedProvider-backed integration (PR CI never 
       const optionIds = [...candidates.map((c) => c.targetId), "none"].sort();
       const candidateSetDigest = optionIds.filter((id) => id !== "none").sort().join(",");
 
-      // Seed a recording matching exactly what runSyntheticPolicy will build.
+      // Seed a recording matching exactly what runSyntheticPolicy will build,
+      // including the digest computed from the actual redacted DTO payload.
+      // A fresh Redactor mirrors what the runtime below constructs internally
+      // (no operator rules, nothing learned yet) — safe since this scenario
+      // never calls .learn() before building the DTOs.
+      const redactedState = buildRedactedState(candidates, new Redactor());
       const recordingRequest: DecisionRequest = {
         evidence: {
           requestId: "seed",
@@ -349,7 +361,7 @@ describe("synthetic policy — RecordedProvider-backed integration (PR CI never 
           frameId: "main",
           navigationEpoch: 0,
           candidateSetDigest,
-          redactedStateDigest: candidateSetDigest,
+          redactedStateDigest: computeRedactedStateDigest(redactedState),
           deadline: Date.now() + 5000,
           signal: new AbortController().signal
         },

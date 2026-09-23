@@ -13,6 +13,7 @@
  */
 import {
   buildCandidateSummaryDTO,
+  type CandidateSummaryDTO,
   type DecisionOutcomeStatus,
   type DecisionPoint,
   type FreshnessEvidence,
@@ -116,6 +117,18 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
   const optionIds = [...admittedCandidates.map((c) => c.targetId), "none"];
   const candidateSetDigest = optionIds.slice(0, -1).sort().join(",") || "empty";
 
+  // Step 2: compiled through the #16 DTO framework — allowlisted, redacted,
+  // truncated. Never a raw value. `SyntheticCandidate.name` is the kernel's
+  // accessible name; buildCandidateSummaryDTO's input field is named
+  // accessibleName, so it's mapped explicitly here rather than relying on an
+  // unrelated property name lining up by accident.
+  const redactedState = buildRedactedState(admittedCandidates, runtime.redactor);
+  // Digested from the *actual* DTO payload (not just the candidate-set
+  // digest) — two candidate sets with the same targetIds but different
+  // names/roles must not collide, since RecordedProvider matches on this
+  // digest and a collision would replay a recording for different state.
+  const redactedStateDigest = computeRedactedStateDigest(redactedState);
+
   const result = await runtime.evaluate({
     point: SYNTHETIC_POINT,
     origin: options.origin,
@@ -133,19 +146,12 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
         frameId: "main",
         navigationEpoch: options.navigationEpoch ?? 0,
         candidateSetDigest,
-        redactedStateDigest: candidateSetDigest,
+        redactedStateDigest,
         deadline: Date.now() + 5000,
         signal: new AbortController().signal
       },
       questions: [{ kind: "choice", id: "target", options: optionIds }],
-      // Step 2: compiled through the #16 DTO framework — allowlisted,
-      // redacted, truncated. Never a raw value. `SyntheticCandidate.name` is
-      // the kernel's accessible name; buildCandidateSummaryDTO's input field
-      // is named accessibleName, so it's mapped explicitly here rather than
-      // relying on an unrelated property name lining up by accident.
-      redactedState: admittedCandidates.map((c) =>
-        buildCandidateSummaryDTO({ targetId: c.targetId, kind: c.kind, role: c.role, accessibleName: c.name }, runtime.redactor)
-      )
+      redactedState
     }),
     select: (outcomes) => {
       capturedOutcomes = outcomes;
@@ -167,7 +173,7 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
     questionVersion: SYNTHETIC_QUESTION_VERSION,
     policyVersion: SYNTHETIC_POLICY_VERSION,
     candidateSetDigest,
-    redactedStateDigest: candidateSetDigest,
+    redactedStateDigest,
     outcomes: capturedOutcomes,
     status: mapToRecordStatus(result),
     threshold: undefined,
@@ -176,6 +182,29 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
   };
 
   return { result, record, admittedCandidateIds: admittedIds, degradation };
+}
+
+/** Builds the same allowlisted, redacted candidate DTOs `runSyntheticPolicy`
+ * sends outbound — exported so a test seeding a `RecordedProvider` recording
+ * can build its `redactedStateDigest` from the exact same payload. */
+export function buildRedactedState(candidates: SyntheticCandidate[], redactor: SemanticRuntime["redactor"]): CandidateSummaryDTO[] {
+  return candidates.map((c) => buildCandidateSummaryDTO({ targetId: c.targetId, kind: c.kind, role: c.role, accessibleName: c.name }, redactor));
+}
+
+/** Digests the actual redacted DTO payload (not just candidate ids) —
+ * exported for the same reason as `buildRedactedState`. */
+export function computeRedactedStateDigest(redactedState: CandidateSummaryDTO[]): string {
+  return djb2(JSON.stringify(redactedState));
+}
+
+/** Same non-cryptographic stable hash the kernel/digest module uses (djb2) —
+ * good enough for "does the exact DTO payload match" test-support matching. */
+function djb2(input: string): string {
+  let hash = 5381;
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(16);
 }
 
 /** Finds the interactive element a candidate id points to, for assertions

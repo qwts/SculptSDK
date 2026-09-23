@@ -36,19 +36,46 @@ test.describe("synthetic policy consumer on a real Chromium page", () => {
       expect(accepted.result).toEqual({ kind: "accepted", value: chosenId });
       expect(accepted.record.status).toBe("accepted");
 
+      // A real foreign selection (not one of the admitted candidate ids) must
+      // be rejected by validation, never accepted — I3 (never admits outside
+      // the deterministic set) on a real Chromium page, not just in unit tests.
       const foreignProvider: DecisionProvider = {
         id: "e2e-stub-foreign",
         supports: () => true,
-        decide: async () => {
-          throw new ProviderUnavailableError("timeout");
-        }
+        decide: async (): Promise<RawDecisionResponse> => ({
+          answers: [{ kind: "choice", questionId: "target", selected: "not-an-admitted-candidate" }]
+        })
       };
       const runtimeRequired = new SemanticRuntime({
         settings: { semanticResolution: "enabled", actionLogging: "disabled" },
         provider: foreignProvider
       });
-      const unsatisfied = await runSyntheticPolicy({
+      const rejected = await runSyntheticPolicy({
         runtime: runtimeRequired,
+        admittedCandidates: candidates,
+        origin: new URL(baseURL!).origin,
+        degradation: "required"
+      });
+      expect(rejected.result.kind).toBe("unsatisfied");
+      if (rejected.result.kind === "unsatisfied") {
+        expect(rejected.result.reason.code).toBe("invalid_answer");
+      }
+
+      // Separately: a transport failure (timeout) is its own, distinct
+      // unsatisfied reason — not to be confused with a rejected foreign answer.
+      const timeoutProvider: DecisionProvider = {
+        id: "e2e-stub-timeout",
+        supports: () => true,
+        decide: async () => {
+          throw new ProviderUnavailableError("timeout");
+        }
+      };
+      const runtimeTimeout = new SemanticRuntime({
+        settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+        provider: timeoutProvider
+      });
+      const unsatisfied = await runSyntheticPolicy({
+        runtime: runtimeTimeout,
         admittedCandidates: candidates,
         origin: new URL(baseURL!).origin,
         degradation: "required"
