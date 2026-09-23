@@ -220,6 +220,42 @@ describe("DP-1 disambiguation: session-scoped decision evidence cache (#25)", ()
     }
   });
 
+  it("decisionCacheMaxEntries threads through Sculpt.attach — a bound of 1 evicts the earlier entry", async () => {
+    const TWO_TIES_HTML = `<!doctype html><html><body>
+      <button id="page-save" type="button">Save</button>
+      <div role="dialog" aria-label="Confirm changes"><button id="dialog-save" type="button">Save</button></div>
+      <button id="page-cancel" type="button">Cancel</button>
+      <div role="dialog" aria-label="Discard changes"><button id="dialog-cancel" type="button">Cancel</button></div>
+    </body></html>`;
+    let callCount = 0;
+    const provider = stubProvider(async (request) => {
+      callCount++;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: TWO_TIES_HTML, url: `${ORIGIN}/` });
+    // Without decisionCacheMaxEntries threaded from SemanticAttachOptions
+    // through to SemanticRuntime/DecisionEvidenceCache, this would silently
+    // fall back to the default bound (100) and both ties would stay cached.
+    const sculpt = await Sculpt.attach({
+      adapter,
+      authority: { semanticResolution: "enabled" },
+      semantic: { provider, calibration: new StaticCalibrationRegistry([THRESHOLD]), decisionCacheMaxEntries: 1 }
+    });
+    try {
+      await sculpt.ui.find({ kind: "button", name: "Save" });
+      expect(callCount).toBe(1);
+      await sculpt.ui.find({ kind: "button", name: "Cancel" });
+      expect(callCount).toBe(2);
+      // The "Save" tie was evicted to make room for "Cancel" — a bound of 1
+      // in effect, not the default 100.
+      await sculpt.ui.find({ kind: "button", name: "Save" });
+      expect(callCount).toBe(3);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
   it("a navigation between two otherwise-identical queries is a miss — the provider is called again", async () => {
     let callCount = 0;
     const provider = stubProvider(async (request) => {
