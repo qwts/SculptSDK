@@ -65,4 +65,8 @@ export interface QueryCandidate {
   score: number;
   confidence: number;
   reasons: string[];
+  /** Mandatory predicates the query requested but this candidate could not
+   * be conclusively verified against (#23) — e.g. `region` with no layout
+   * data. Empty unless the query used a predicate with this gap. */
+  unverifiedMandatoryPredicates: string[];
 }

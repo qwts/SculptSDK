@@ -8,6 +8,7 @@
  * with it in m0. Reached through `ActionEnv.semantic` — see `sculpt.ts`.
  */
 import type { SculptControlSettings } from "../types/index.js";
+import { EMPTY_CALIBRATION_REGISTRY, type CalibrationRegistry } from "./calibration.js";
 import { OperationBudget, type SemanticBudget } from "./budget.js";
 import { isFresh, type FreshnessEvidence } from "./freshness.js";
 import { NullProvider } from "./null-provider.js";
@@ -38,6 +39,10 @@ export interface SemanticAttachOptions {
   /** Operator hook for redacting free text beyond the built-in learned-value
    * scrubbing (§16). */
   redactionRules?: RedactionRule[];
+  /** Calibrated acceptance thresholds (§21, not built in m1). Defaults to
+   * none — every decision point runs in shadow mode until an operator
+   * supplies real artifacts. */
+  calibration?: CalibrationRegistry;
 }
 
 export interface SemanticPointConfig<TFallback, TAccepted> {
@@ -89,10 +94,15 @@ export interface EvaluateOptions {
 export interface SemanticRuntimeOptions {
   settings: Pick<SculptControlSettings, "semanticResolution" | "actionLogging">;
   provider?: DecisionProvider;
+  /** Per-point on/off switches (§14). A point not listed here is enabled
+   * whenever `semanticResolution` itself is enabled; explicitly listing it
+   * as `false` opts it out without touching the global setting. */
+  points?: Record<string, boolean>;
   budget?: SemanticBudget;
   sourceOriginAllowlist?: string[];
   providerEndpointAllowlist?: string[];
   redactionRules?: RedactionRule[];
+  calibration?: CalibrationRegistry;
 }
 
 /**
@@ -128,7 +138,11 @@ export class SemanticRuntime {
   readonly redactor: Redactor;
   readonly sourceOriginAllowlist: readonly string[] | undefined;
   readonly providerEndpointAllowlist: readonly string[] | undefined;
+  /** Calibrated acceptance thresholds (§21). Empty until an operator
+   * supplies real artifacts — every point runs in shadow mode until then. */
+  readonly calibration: CalibrationRegistry;
 
+  private readonly points: Readonly<Record<string, boolean>>;
   private readonly defaultBudget: SemanticBudget;
   private readonly actionLogging: SculptControlSettings["actionLogging"];
   private readonly logs: SemanticLogEntry[] = [];
@@ -141,6 +155,8 @@ export class SemanticRuntime {
     // A provider passed while disabled is replaced with NullProvider and
     // never referenced again — no initialization, no capability probe.
     this.provider = this.enabled ? (options.provider ?? new NullProvider()) : new NullProvider();
+    this.calibration = options.calibration ?? EMPTY_CALIBRATION_REGISTRY;
+    this.points = options.points ?? {};
     this.defaultBudget = options.budget ?? {};
     this.actionLogging = options.settings.actionLogging;
     this.redactor = new Redactor(options.redactionRules ?? []);
@@ -152,6 +168,13 @@ export class SemanticRuntime {
    * `agent.execute`), to pass into every `evaluate()` call nested inside it. */
   createOperationBudget(overrides: SemanticBudget = {}): OperationBudget {
     return new OperationBudget({ ...this.defaultBudget, ...overrides });
+  }
+
+  /** Whether a specific decision point should run at all — `enabled` (the
+   * global setting) is necessary but not sufficient; a caller may also have
+   * opted this one point out via `points`. */
+  isPointEnabled(point: DecisionPoint): boolean {
+    return this.enabled && this.points[point] !== false;
   }
 
   /** Entries logged so far, per `actionLogging` (§16). Bounded by the

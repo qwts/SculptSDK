@@ -149,16 +149,23 @@ export interface RankedElement {
   score: number;
   confidence: number;
   reasons: string[];
+  /** Predicates the query requested but this candidate could not be
+   * conclusively checked against (e.g. `region` with no layout data) — never
+   * a hard filter rejection, but a semantic policy must not treat these
+   * candidates as having verifiably passed everything mandatory (#23). */
+  unverifiedPredicates: string[];
 }
 
 interface MatchOutcome {
   score: number;
   reasons: string[];
   hadTextualMatcher: boolean;
+  unverifiedPredicates: string[];
 }
 
 function matchAgainst(ctx: KernelContext, el: Element, q: WireUIQuery): MatchOutcome | null {
   const reasons: string[] = [];
+  const unverifiedPredicates: string[] = [];
   let score = 0;
   let hadTextualMatcher = false;
 
@@ -254,11 +261,15 @@ function matchAgainst(ctx: KernelContext, el: Element, q: WireUIQuery): MatchOut
   if (q.region !== undefined) {
     const verdict = regionMatches(ctx, el, q.region);
     if (verdict === false) return null;
-    if (verdict === true) reasons.push(`in ${q.region} region`);
-    else reasons.push("region check skipped: no layout data");
+    if (verdict === true) {
+      reasons.push(`in ${q.region} region`);
+    } else {
+      reasons.push("region check skipped: no layout data");
+      unverifiedPredicates.push("region");
+    }
   }
 
-  return { score, reasons, hadTextualMatcher };
+  return { score, reasons, hadTextualMatcher, unverifiedPredicates };
 }
 
 function regionMatches(ctx: KernelContext, el: Element, region: string): boolean | null {
@@ -356,7 +367,7 @@ export function queryUI(ctx: KernelContext, q: WireUIQuery): RankedElement[] {
       }
       const denominator = outcome.hadTextualMatcher ? 40 : 12;
       const confidence = Math.min(1, score / denominator);
-      ranked.push({ el, score, confidence, reasons });
+      ranked.push({ el, score, confidence, reasons, unverifiedPredicates: outcome.unverifiedPredicates });
     }
   }
 

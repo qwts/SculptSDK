@@ -83,10 +83,12 @@ export class Sculpt {
     const semantic = new SemanticRuntime({
       settings,
       provider: options.semantic?.provider,
+      points: options.semantic?.points,
       budget: options.semantic?.budget,
       sourceOriginAllowlist: options.semantic?.sourceOriginAllowlist,
       providerEndpointAllowlist: options.semantic?.providerEndpointAllowlist,
-      redactionRules: options.semantic?.redactionRules
+      redactionRules: options.semantic?.redactionRules,
+      calibration: options.semantic?.calibration
     });
     const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic };
     return new Sculpt(adapter, settings, capabilities, kernel, foundation, env);

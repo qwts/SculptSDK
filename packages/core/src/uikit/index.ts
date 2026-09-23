@@ -8,10 +8,12 @@ import type {
   ExecutionGuard,
   FormFillOptions,
   FormFillResult,
+  KernelEvidence,
   SetValueOptions,
   SubmitOptions,
   TargetRef,
   TargetSummary,
+  TextMatcher,
   UIKind,
   UIQuery
 } from "../types/index.js";
@@ -22,6 +24,7 @@ import type { ActionEnv } from "./action-runner.js";
 import { runAction } from "./action-runner.js";
 import type { KernelTarget } from "../foundation/index.js";
 import { SculptError } from "../errors.js";
+import { DP1_POINT, resolveDisambiguation, type SemanticDecisionRecord } from "../semantic/index.js";
 
 export { runAction, syntheticResult, DEFAULT_ORCHESTRATION } from "./action-runner.js";
 export type { ActionEnv, OrchestrationDefaults, ActionSpec } from "./action-runner.js";
@@ -311,6 +314,28 @@ const DEFAULT_MIN_CONFIDENCE = 0.5;
 /** Two candidates within this score margin are reported as ambiguous (§31.12). */
 const AMBIGUITY_MARGIN = 2;
 
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
+function matcherText(matcher: TextMatcher): string {
+  return matcher instanceof RegExp ? matcher.source : matcher;
+}
+
+/** One intent sentence describing a query (§2's DP-1 state shape) — free
+ * text, learned by the runtime's redactor like any other outbound string. */
+function describeQueryIntent(query: UIQuery): string {
+  const parts: string[] = [query.kind ?? "element"];
+  if (query.name !== undefined) parts.push(`named like "${matcherText(query.name)}"`);
+  if (query.label !== undefined) parts.push(`labelled like "${matcherText(query.label)}"`);
+  if (query.text !== undefined) parts.push(`with text like "${matcherText(query.text)}"`);
+  return `find a ${parts.join(" ")}`;
+}
+
 export class UIRoot {
   constructor(private readonly env: ActionEnv) {}
 
@@ -324,28 +349,62 @@ export class UIRoot {
   }
 
   async tryFind(query: UIQuery): Promise<UIElement | null> {
-    const { candidates } = await this.env.kernel.call<{ candidates: QueryCandidate[] }>("query", {
-      query: serializeQuery(query),
-      limit: 5
-    });
+    const { candidates, evidence } = await this.env.kernel.call<{ candidates: QueryCandidate[]; evidence: KernelEvidence }>(
+      "query",
+      { query: serializeQuery(query), limit: 5 }
+    );
     const min = query.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
     const best = candidates[0];
     if (!best || best.confidence < min) return null;
     const second = candidates[1];
-    if (second && second.confidence >= min && best.score - second.score < AMBIGUITY_MARGIN) {
-      throw new SculptError("TARGET_AMBIGUOUS", "query matched multiple equally-ranked elements", {
-        layer: "uikit",
-        details: {
-          candidates: candidates.slice(0, 3).map((c) => ({
-            name: c.summary.name,
-            role: c.summary.role,
-            score: c.score,
-            confidence: c.confidence
-          }))
-        }
-      });
+    if (!(second && second.confidence >= min && best.score - second.score < AMBIGUITY_MARGIN)) {
+      return instantiate(this.env, best, query.kind);
     }
-    return instantiate(this.env, best, query.kind);
+
+    // A genuine tie: every candidate here already passed every mandatory
+    // matcher deterministically (I1/I3) — DP-1 only helps pick among them,
+    // it never widens the admitted set (#23).
+    const tied = candidates.filter((c) => c.confidence >= min && best.score - c.score < AMBIGUITY_MARGIN);
+    let dp1Record: SemanticDecisionRecord | undefined;
+    if (this.env.semantic.isPointEnabled(DP1_POINT)) {
+      const disambiguated = await this.resolveViaDp1(query, tied, evidence);
+      dp1Record = disambiguated.record;
+      if (disambiguated.element) return disambiguated.element;
+    }
+
+    throw new SculptError("TARGET_AMBIGUOUS", "query matched multiple equally-ranked elements", {
+      layer: "uikit",
+      details: {
+        candidates: candidates.slice(0, 3).map((c) => ({
+          name: c.summary.name,
+          role: c.summary.role,
+          score: c.score,
+          confidence: c.confidence
+        })),
+        ...(dp1Record ? { semantic: dp1Record } : {})
+      }
+    });
+  }
+
+  /** DP-1 disambiguation (#23): never throws, never widens `tied` — either
+   * it accepts one of the already-admitted tied candidates or it doesn't,
+   * and the caller falls through to today's TARGET_AMBIGUOUS unchanged. */
+  private async resolveViaDp1(
+    query: UIQuery,
+    tied: QueryCandidate[],
+    evidence: KernelEvidence
+  ): Promise<{ element: UIElement | null; record: SemanticDecisionRecord }> {
+    const route = await this.env.foundation.observers.routeState();
+    const { acceptedTargetId, record } = await resolveDisambiguation({
+      runtime: this.env.semantic,
+      origin: safeOrigin(route.url),
+      tied,
+      intent: describeQueryIntent(query),
+      routePath: route.path + route.hash,
+      documentEvidence: { documentId: evidence.documentId, navigationEpoch: evidence.navigationEpoch }
+    });
+    const accepted = acceptedTargetId ? tied.find((c) => c.summary.targetId === acceptedTargetId) : undefined;
+    return { element: accepted ? instantiate(this.env, accepted, query.kind) : null, record };
   }
 
   async find(query: UIQuery): Promise<UIElement> {
@@ -367,7 +426,8 @@ export class UIRoot {
       identity: resolution.identity,
       score: 0,
       confidence: 1,
-      reasons: ["resolved from explicit target reference"]
+      reasons: ["resolved from explicit target reference"],
+      unverifiedMandatoryPredicates: []
     };
     return instantiate(this.env, candidate);
   }
