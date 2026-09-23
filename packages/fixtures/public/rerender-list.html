@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rerendering list</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      li { padding: 4px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Task list</h1>
+    <button id="shuffle" type="button">Shuffle</button>
+    <ul id="list">
+      <li data-id="a">Write report</li>
+      <li data-id="b">Review pull request</li>
+      <li data-id="c">Plan sprint</li>
+    </ul>
+
+    <script>
+      const list = document.getElementById("list");
+      document.getElementById("shuffle").addEventListener("click", () => {
+        // Full re-render: every <li> is replaced with new elements (new
+        // identity), same data-id/text pairs in reverse order — a stand-in
+        // for an SPA rerender that keeps content stable but drops DOM nodes.
+        const items = Array.from(list.children).map((li) => ({
+          id: li.dataset.id,
+          text: li.textContent
+        }));
+        list.replaceChildren(
+          ...items
+            .slice()
+            .reverse()
+            .map(({ id, text }) => {
+              const li = document.createElement("li");
+              li.dataset.id = id;
+              li.textContent = text;
+              return li;
+            })
+        );
+      });
+    </script>
+  </body>
+</html>
