@@ -21,11 +21,11 @@ import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-// Bumped for §22: a target argument can carry an execution guard that
-// forbids implicit rebinding and fails closed on any document/navigation/
-// identity mismatch. Additive — a target with no guard behaves exactly as
-// before.
-export const KERNEL_VERSION = "0.3.0";
+// Bumped for §23: query candidates report which mandatory predicates (if
+// any) could not be conclusively verified for them (e.g. `region` with no
+// layout data), so a semantic policy can refuse to treat them as having
+// verifiably passed everything mandatory. Additive.
+export const KERNEL_VERSION = "0.4.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -168,7 +168,8 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
         identity: computeIdentity(ctx, r.el),
         score: r.score,
         confidence: r.confidence,
-        reasons: r.reasons
+        reasons: r.reasons,
+        unverifiedMandatoryPredicates: r.unverifiedPredicates
       }));
       return { candidates, total: ranked.length, evidence: pageEvidence() };
     },

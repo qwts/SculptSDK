@@ -149,16 +149,23 @@ export interface RankedElement {
   score: number;
   confidence: number;
   reasons: string[];
+  /** Predicates the query requested but this candidate could not be
+   * conclusively checked against (e.g. `region` with no layout data) — never
+   * a hard filter rejection, but a semantic policy must not treat these
+   * candidates as having verifiably passed everything mandatory (#23). */
+  unverifiedPredicates: string[];
 }
 
 interface MatchOutcome {
   score: number;
   reasons: string[];
   hadTextualMatcher: boolean;
+  unverifiedPredicates: string[];
 }
 
 function matchAgainst(ctx: KernelContext, el: Element, q: WireUIQuery): MatchOutcome | null {
   const reasons: string[] = [];
+  const unverifiedPredicates: string[] = [];
   let score = 0;
   let hadTextualMatcher = false;
 
@@ -254,11 +261,15 @@ function matchAgainst(ctx: KernelContext, el: Element, q: WireUIQuery): MatchOut
   if (q.region !== undefined) {
     const verdict = regionMatches(ctx, el, q.region);
     if (verdict === false) return null;
-    if (verdict === true) reasons.push(`in ${q.region} region`);
-    else reasons.push("region check skipped: no layout data");
+    if (verdict === true) {
+      reasons.push(`in ${q.region} region`);
+    } else {
+      reasons.push("region check skipped: no layout data");
+      unverifiedPredicates.push("region");
+    }
   }
 
-  return { score, reasons, hadTextualMatcher };
+  return { score, reasons, hadTextualMatcher, unverifiedPredicates };
 }
 
 function regionMatches(ctx: KernelContext, el: Element, region: string): boolean | null {
@@ -318,11 +329,16 @@ function domDistance(a: Element, b: Element): number {
  * queries are not penalized for having no name matcher.
  */
 export function queryUI(ctx: KernelContext, q: WireUIQuery): RankedElement[] {
-  let scopes: ParentNode[] = [ctx.doc];
+  // Each scope carries forward any unverified predicate from the `within`
+  // query that selected it (e.g. `within: { region: "top" }` with no layout
+  // data) — every element found inside an unverifiable container inherits
+  // that gap too, or a semantic policy would wrongly treat it as having
+  // verifiably passed everything mandatory (#23).
+  let scopes: { el: ParentNode; unverifiedPredicates: string[] }[] = [{ el: ctx.doc, unverifiedPredicates: [] }];
   if (q.within) {
     const containers = queryUI(ctx, q.within);
     if (containers.length === 0) return [];
-    scopes = containers.slice(0, 3).map((c) => c.el);
+    scopes = containers.slice(0, 3).map((c) => ({ el: c.el, unverifiedPredicates: c.unverifiedPredicates }));
   }
 
   const seen = new Set<Element>();
@@ -335,7 +351,7 @@ export function queryUI(ctx: KernelContext, q: WireUIQuery): RankedElement[] {
   }
 
   for (const scope of scopes) {
-    for (const el of collectElements(ctx, scope)) {
+    for (const el of collectElements(ctx, scope.el)) {
       if (seen.has(el)) continue;
       seen.add(el);
       const outcome = matchAgainst(ctx, el, q);
@@ -356,7 +372,11 @@ export function queryUI(ctx: KernelContext, q: WireUIQuery): RankedElement[] {
       }
       const denominator = outcome.hadTextualMatcher ? 40 : 12;
       const confidence = Math.min(1, score / denominator);
-      ranked.push({ el, score, confidence, reasons });
+      const unverifiedPredicates =
+        scope.unverifiedPredicates.length === 0
+          ? outcome.unverifiedPredicates
+          : [...new Set([...outcome.unverifiedPredicates, ...scope.unverifiedPredicates])];
+      ranked.push({ el, score, confidence, reasons, unverifiedPredicates });
     }
   }
 

@@ -1,6 +1,6 @@
 /**
- * @experimental Semantic Resolution Layer (m0 foundations: #12). Not wired
- * into `Sculpt.attach` — see #14. No production decision policy exists yet.
+ * @experimental Semantic Resolution Layer. Foundations landed in m0 (#12);
+ * the first production decision point (DP-1) lands in m1 (#22-#25).
  */
 export * from "./provider.js";
 export * from "./validate.js";
@@ -10,4 +10,6 @@ export * from "./null-provider.js";
 export * from "./freshness.js";
 export * from "./budget.js";
 export * from "./redaction.js";
+export * from "./calibration.js";
 export * from "./runtime.js";
+export * from "./points/dp1-target.js";
