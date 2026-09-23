@@ -88,7 +88,8 @@ export class Sculpt {
       sourceOriginAllowlist: options.semantic?.sourceOriginAllowlist,
       providerEndpointAllowlist: options.semantic?.providerEndpointAllowlist,
       redactionRules: options.semantic?.redactionRules,
-      calibration: options.semantic?.calibration
+      calibration: options.semantic?.calibration,
+      decisionCacheMaxEntries: options.semantic?.decisionCacheMaxEntries
     });
     const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic };
     return new Sculpt(adapter, settings, capabilities, kernel, foundation, env);

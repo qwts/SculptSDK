@@ -9,6 +9,7 @@
  */
 import type { SculptControlSettings } from "../types/index.js";
 import { EMPTY_CALIBRATION_REGISTRY, type CalibrationRegistry } from "./calibration.js";
+import { DecisionEvidenceCache } from "./cache.js";
 import { OperationBudget, type SemanticBudget } from "./budget.js";
 import { isFresh, type FreshnessEvidence } from "./freshness.js";
 import { NullProvider } from "./null-provider.js";
@@ -43,6 +44,9 @@ export interface SemanticAttachOptions {
    * none — every decision point runs in shadow mode until an operator
    * supplies real artifacts. */
   calibration?: CalibrationRegistry;
+  /** Bounds the #25 session-scoped decision evidence cache. Defaults to the
+   * runtime's own default (100) when omitted. */
+  decisionCacheMaxEntries?: number;
 }
 
 export interface SemanticPointConfig<TFallback, TAccepted> {
@@ -103,6 +107,9 @@ export interface SemanticRuntimeOptions {
   providerEndpointAllowlist?: string[];
   redactionRules?: RedactionRule[];
   calibration?: CalibrationRegistry;
+  /** Bounds the session-scoped decision evidence cache (#25) — least-
+   * recently-used entries are evicted once this is reached. Defaults to 100. */
+  decisionCacheMaxEntries?: number;
 }
 
 /**
@@ -141,6 +148,11 @@ export class SemanticRuntime {
   /** Calibrated acceptance thresholds (§21). Empty until an operator
    * supplies real artifacts — every point runs in shadow mode until then. */
   readonly calibration: CalibrationRegistry;
+  /** Session-scoped decision evidence cache (#25) — memory-only, bounded,
+   * scoped to this attachment. A decision point consults it directly
+   * (`SemanticRuntime` itself never reads or writes it); this just owns its
+   * lifetime, clearing it on `dispose()`. */
+  readonly decisionCache: DecisionEvidenceCache;
 
   private readonly points: Readonly<Record<string, boolean>>;
   private readonly defaultBudget: SemanticBudget;
@@ -162,6 +174,7 @@ export class SemanticRuntime {
     this.redactor = new Redactor(options.redactionRules ?? []);
     this.sourceOriginAllowlist = options.sourceOriginAllowlist;
     this.providerEndpointAllowlist = options.providerEndpointAllowlist;
+    this.decisionCache = new DecisionEvidenceCache(options.decisionCacheMaxEntries);
   }
 
   /** Creates a budget for one top-level operation (a UIKit call or
@@ -352,5 +365,6 @@ export class SemanticRuntime {
   dispose(): void {
     this.disposed = true;
     for (const controller of this.pending) controller.abort();
+    this.decisionCache.clear();
   }
 }

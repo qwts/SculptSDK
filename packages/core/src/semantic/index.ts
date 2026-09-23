@@ -11,5 +11,6 @@ export * from "./freshness.js";
 export * from "./budget.js";
 export * from "./redaction.js";
 export * from "./calibration.js";
+export * from "./cache.js";
 export * from "./runtime.js";
 export * from "./points/dp1-target.js";

@@ -6,11 +6,13 @@
  * with text matchers dropped (`mode: "miss"`, #24) — DP-1 never widens the
  * candidate set beyond what the kernel already admitted for that mode.
  */
+import { createHash } from "node:crypto";
 import type { OperationBudget } from "../budget.js";
+import type { CachedDecision, DecisionCacheKey } from "../cache.js";
 import type { KernelEvidence } from "../../types/evidence.js";
 import type { QueryCandidate } from "../../types/queries.js";
-import type { FreshnessEvidence } from "../freshness.js";
-import { buildCandidateSummaryDTO, type CandidateSummaryDTO } from "../redaction.js";
+import { isFresh, type FreshnessEvidence } from "../freshness.js";
+import { buildCandidateSummaryDTO, REDACTION_VERSION, type CandidateSummaryDTO } from "../redaction.js";
 import { checkModelSupport, type ChoiceQuestion, type DecisionPoint, type DecisionRequest } from "../provider.js";
 import type { GatedMetric, SemanticDecisionRecord } from "../records.js";
 import type { SemanticRuntime } from "../runtime.js";
@@ -66,12 +68,14 @@ export interface Dp1DisambiguationResult {
   record: SemanticDecisionRecord;
 }
 
-function djb2(input: string): string {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i++) {
-    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(16);
+/** SHA-256, not a fast non-cryptographic hash: `redactedStateDigest` is part
+ * of the #25 decision-cache key (`DecisionCacheKey`), so a collision here
+ * means the cache can hand back a decision made for a different intent,
+ * route, or candidate set. A 32-bit hash (djb2, used here before) is
+ * trivially collidable by construction and must never gate cache
+ * correctness like this. */
+function digest(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
 /**
@@ -138,13 +142,20 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
   // §16: the digest must cover exactly the payload sent (`redactedState`
   // below), not just the candidate array — otherwise two requests that
   // differ only in intent/route can collide on the same digest.
-  const redactedStateDigest = djb2(JSON.stringify({ candidates: redactedState, intent, route: routePath }));
+  const redactedStateDigest = digest(JSON.stringify({ candidates: redactedState, intent, route: routePath }));
 
-  const question: ChoiceQuestion = { kind: "choice", id: "target", options: optionIds };
-  let capturedOutcomes: QuestionOutcome[] = [];
-  let acceptedTargetId: string | undefined;
-  let gatedThreshold: number | undefined;
-  let gatedMetric: GatedMetric | undefined;
+  // §21 (not built in m1): the threshold actually in effect for this exact
+  // (model, policy/question version, mode) — computed once, both for the
+  // cache key (there's no separate "calibration version" anywhere in the
+  // codebase; a different threshold is a different decision, #25) and for
+  // gating acceptance below.
+  const calibrationThreshold = runtime.calibration.lookup({
+    point: DP1_POINT,
+    model: DP1_MODEL,
+    policyVersion: DP1_POLICY_VERSION,
+    questionVersion: DP1_QUESTION_VERSION,
+    mode: options.mode
+  });
 
   const capturedEvidence: FreshnessEvidence = {
     documentId: options.documentEvidence.documentId,
@@ -152,6 +163,48 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
     frameId: options.documentEvidence.frameId,
     candidateSetDigest
   };
+
+  const cacheKey: DecisionCacheKey = {
+    point: DP1_POINT,
+    model: DP1_MODEL,
+    questionVersion: DP1_QUESTION_VERSION,
+    policyVersion: DP1_POLICY_VERSION,
+    mode: options.mode,
+    candidateGenerationVersion: options.documentEvidence.kernelVersion ?? "unknown",
+    redactionVersion: REDACTION_VERSION,
+    calibrationMinConfidence: calibrationThreshold?.minConfidence ?? "none",
+    origin: options.origin,
+    frameId: options.documentEvidence.frameId,
+    documentId: options.documentEvidence.documentId,
+    navigationEpoch: options.documentEvidence.navigationEpoch,
+    candidateSetDigest,
+    redactedStateDigest
+  };
+
+  // §25: a hit still gets the same freshness revalidation a live decision
+  // would — the key alone already covers "nothing versioned changed", but
+  // not the narrower race of the page moving on between the cache write and
+  // this read. Without a `checkFreshness` hook (e.g. a test that doesn't
+  // model navigation), a hit is returned as-is, matching how the live path
+  // below also skips that gate when no hook is supplied.
+  const cached = runtime.decisionCache.get(cacheKey);
+  if (cached) {
+    if (!options.checkFreshness) return cached;
+    const current = await options.checkFreshness();
+    if (isFresh(capturedEvidence, { documentId: current.documentId, navigationEpoch: current.navigationEpoch, frameId: current.frameId, candidateSetDigest })) {
+      return cached;
+    }
+    // Stale: fall through to a live decision rather than serving or
+    // rewriting this entry — the fresh call below will key differently once
+    // it captures current evidence, so this entry simply ages out.
+  }
+
+  const question: ChoiceQuestion = { kind: "choice", id: "target", options: optionIds };
+  let capturedOutcomes: QuestionOutcome[] = [];
+  let acceptedTargetId: string | undefined;
+  let gatedThreshold: number | undefined;
+  let gatedMetric: GatedMetric | undefined;
+
   // §2's DP-1 timeout budget: only spend it when the caller didn't already
   // share a budget with us — a nested call inherits the operation's own
   // deadline instead of shortening it to 800ms.
@@ -194,22 +247,15 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
         // DP-1 runs in shadow mode — record what the provider said, accept
         // nothing. This is the only gate deciding acceptance; nothing above
         // this line ever treats a confidence number as a threshold.
-        const threshold = runtime.calibration.lookup({
-          point: DP1_POINT,
-          model: DP1_MODEL,
-          policyVersion: DP1_POLICY_VERSION,
-          questionVersion: DP1_QUESTION_VERSION,
-          mode: options.mode
-        });
-        if (!threshold) return undefined;
+        if (!calibrationThreshold) return undefined;
         // A distribution, when present, is the metric of record (I7): a
         // selected option missing from it means zero mass on that option,
         // never a silent fallback to the answer's overall confidence.
         const metric: GatedMetric = answer.distribution !== undefined ? "selectedOptionProbability" : "providerConfidence";
         const confidence = metric === "selectedOptionProbability" ? (accepted.accepted.selectedOptionProbability ?? 0) : (accepted.accepted.providerConfidence ?? 0);
-        gatedThreshold = threshold.minConfidence;
+        gatedThreshold = calibrationThreshold.minConfidence;
         gatedMetric = metric;
-        if (confidence < threshold.minConfidence) return undefined;
+        if (confidence < calibrationThreshold.minConfidence) return undefined;
         return selected;
       },
       capturedEvidence,
@@ -251,6 +297,16 @@ export async function resolveDisambiguation(options: Dp1DisambiguationOptions): 
     latencyMs: Date.now() - startedAt,
     error: result.kind !== "accepted" && result.kind !== "disabled" ? { code: result.reason.code, message: result.reason.detail ?? "" } : undefined
   };
+
+  // §25: only ever cache an actual accept. `evaluate()` never resolves
+  // "accepted" for a request that was aborted or superseded (late results
+  // fall through to "cancelled" instead, per `runtime.ts`), so this can't
+  // write a late result — and there's nothing evidence-only to cache for an
+  // abstain/degrade anyway.
+  if (result.kind === "accepted") {
+    const entry: CachedDecision = { acceptedTargetId, record };
+    runtime.decisionCache.set(cacheKey, entry);
+  }
 
   return { acceptedTargetId, record };
 }

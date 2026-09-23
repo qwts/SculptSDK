@@ -21,11 +21,11 @@ import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-// Bumped for §23: query candidates report which mandatory predicates (if
-// any) could not be conclusively verified for them (e.g. `region` with no
-// layout data), so a semantic policy can refuse to treat them as having
-// verifiably passed everything mandatory. Additive.
-export const KERNEL_VERSION = "0.4.0";
+// Bumped for §25: page evidence now carries the kernel's own build version,
+// the "candidate-generation version" a decision evidence cache keys on so a
+// cache entry can never survive a candidate-generation behavior change
+// silently. Additive.
+export const KERNEL_VERSION = "0.5.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -146,7 +146,8 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
   const pageEvidence = (): KernelEvidence => ({
     documentId: ctx.state.documentId,
     navigationEpoch: ctx.state.navigationEpoch,
-    frameId: "main"
+    frameId: "main",
+    kernelVersion: KERNEL_VERSION
   });
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
