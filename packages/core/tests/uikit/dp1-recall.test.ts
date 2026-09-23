@@ -135,6 +135,27 @@ describe("DP-1 recall: every non-text predicate stays mandatory", () => {
   });
 });
 
+describe("DP-1 recall: never sends the URL hash fragment as route state", () => {
+  it("routePath is the pathname only, even when the page URL carries a token-bearing hash", async () => {
+    let capturedRoute: string | undefined;
+    const provider = stubProvider(async (request) => {
+      capturedRoute = (request.redactedState as { route: string }).route;
+      return { answers: [] };
+    });
+    const adapter = new TestHarnessAdapter({ html: SYNONYM_HTML, url: `${ORIGIN}/login#access_token=super-secret-token` });
+    const sculpt = await Sculpt.attach({ adapter, authority: { semanticResolution: "enabled" }, semantic: { provider } });
+    try {
+      await sculpt.ui.tryFind({ kind: "button", name: "Sign in", visible: true, enabled: true, recall: true });
+    } finally {
+      await sculpt.dispose();
+    }
+    expect(capturedRoute).toBeDefined();
+    expect(capturedRoute).not.toContain("access_token");
+    expect(capturedRoute).not.toContain("#");
+    expect(capturedRoute).toBe("/login");
+  });
+});
+
 describe("DP-1 recall: deterministic, capped retrieval", () => {
   it("never exceeds DP1_RECALL_CAP (32) even with far more structurally-matching candidates", async () => {
     const buttons = Array.from({ length: 40 }, (_, i) => `<button id="btn-${i}">Item ${i}</button>`).join("\n");
