@@ -187,6 +187,112 @@ describe("DP-1 disambiguation: an unverifiable predicate on a `within` container
   });
 });
 
+describe("DP-1 disambiguation: session-scoped decision evidence cache (#25)", () => {
+  const CACHE_FIXTURE_HTML = `<!doctype html><html><body>
+    <div id="container">
+      <button id="page-save" type="button">Save</button>
+      <div role="dialog" aria-label="Confirm changes">
+        <button id="dialog-save" type="button">Save</button>
+      </div>
+    </div>
+  </body></html>`;
+
+  it("a repeated identical query skips the provider call", async () => {
+    let callCount = 0;
+    const provider = stubProvider(async (request) => {
+      callCount++;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: CACHE_FIXTURE_HTML, url: `${ORIGIN}/` });
+    const sculpt = await Sculpt.attach({
+      adapter,
+      authority: { semanticResolution: "enabled" },
+      semantic: { provider, calibration: new StaticCalibrationRegistry([THRESHOLD]) }
+    });
+    try {
+      const first = await sculpt.ui.find({ kind: "button", name: "Save" });
+      const second = await sculpt.ui.find({ kind: "button", name: "Save" });
+      expect(callCount).toBe(1);
+      expect(second.summary.targetId).toBe(first.summary.targetId);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("a navigation between two otherwise-identical queries is a miss — the provider is called again", async () => {
+    let callCount = 0;
+    const provider = stubProvider(async (request) => {
+      callCount++;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: CACHE_FIXTURE_HTML, url: `${ORIGIN}/` });
+    const sculpt = await Sculpt.attach({
+      adapter,
+      authority: { semanticResolution: "enabled" },
+      semantic: { provider, calibration: new StaticCalibrationRegistry([THRESHOLD]) }
+    });
+    try {
+      await sculpt.ui.find({ kind: "button", name: "Save" });
+      await sculpt.page.navigate(`${ORIGIN}/elsewhere`);
+      await sculpt.ui.find({ kind: "button", name: "Save" });
+      expect(callCount).toBe(2);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+
+  it("a decision served from the cache still fails the #22 guard, and nothing is clicked, once its target has rerendered", async () => {
+    let callCount = 0;
+    const provider = stubProvider(async (request) => {
+      callCount++;
+      const options = (request.questions[0] as { options: string[] }).options;
+      return { answers: [{ kind: "choice", questionId: "target", selected: options[0]!, providerConfidence: 0.99 }] };
+    });
+    const adapter = new TestHarnessAdapter({ html: CACHE_FIXTURE_HTML, url: `${ORIGIN}/` });
+    const sculpt = await Sculpt.attach({
+      adapter,
+      authority: { semanticResolution: "enabled" },
+      semantic: { provider, calibration: new StaticCalibrationRegistry([THRESHOLD]) }
+    });
+    try {
+      // First call: a genuine miss, the provider decides.
+      await sculpt.ui.find({ kind: "button", name: "Save" });
+      // Second call, page unchanged: served from the cache (#25) — the
+      // provider is never asked again.
+      const cached = await sculpt.ui.find({ kind: "button", name: "Save" });
+      expect(callCount).toBe(1);
+
+      const evidence = await sculpt.foundation.observers.evidence();
+      const guard = cached.guardFrom(evidence);
+
+      // Now the page moves on — an SPA rerender replaces the tied region
+      // with new elements, after the cached decision was already served.
+      let replacementClicked = false;
+      adapter.document.getElementById("container")!.innerHTML =
+        '<button id="page-save-2" type="button">Save</button>' +
+        '<div role="dialog" aria-label="Confirm changes"><button id="dialog-save-2" type="button">Save</button></div>';
+      adapter.document.getElementById("page-save-2")?.addEventListener("click", () => {
+        replacementClicked = true;
+      });
+      adapter.document.getElementById("dialog-save-2")?.addEventListener("click", () => {
+        replacementClicked = true;
+      });
+
+      const result = await cached.click({ guard, recovery: { retryLimit: 0 } });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.code).toBe("TARGET_STALE");
+      expect(replacementClicked).toBe(false);
+      // Still just the one provider call from the very first, uncached decision.
+      expect(callCount).toBe(1);
+    } finally {
+      await sculpt.dispose();
+    }
+  });
+});
+
 describe("DP-1 disambiguation: a tied set wider than the tie-detection query's own limit", () => {
   const SIX_WAY_TIE_HTML = `<!doctype html><html><body>
     ${Array.from({ length: 6 }, (_, i) => `<button id="save-${i}" type="button">Save</button>`).join("\n")}

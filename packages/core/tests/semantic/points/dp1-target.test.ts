@@ -303,6 +303,97 @@ describe("DP-1: records the threshold and metric that actually gated the decisio
   });
 });
 
+describe("DP-1: session-scoped decision evidence cache (#25)", () => {
+  it("a repeated identical decision skips the provider call", async () => {
+    let callCount = 0;
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => {
+      callCount++;
+      return acceptedAnswerFor("t1", 0.9);
+    });
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const first = await resolveDisambiguation(baseOptions(runtime, tied));
+    const second = await resolveDisambiguation(baseOptions(runtime, tied));
+
+    expect(callCount).toBe(1);
+    expect(second.acceptedTargetId).toBe(first.acceptedTargetId);
+    expect(second.record).toEqual(first.record);
+  });
+
+  it("a different navigationEpoch (simulating navigation) is a miss — the provider is called again", async () => {
+    let callCount = 0;
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => {
+      callCount++;
+      return acceptedAnswerFor("t1", 0.9);
+    });
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    await resolveDisambiguation(baseOptions(runtime, tied));
+    await resolveDisambiguation({
+      ...baseOptions(runtime, tied),
+      documentEvidence: { documentId: "doc-1", navigationEpoch: 1, frameId: "main" }
+    });
+
+    expect(callCount).toBe(2);
+  });
+
+  it("a different mode (tie vs. miss) is a miss, even for the same tied set", async () => {
+    let callCount = 0;
+    const tied = [candidate("t1"), candidate("t2")];
+    const provider = stubProvider(async () => {
+      callCount++;
+      return acceptedAnswerFor("t1", 0.9);
+    });
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD, { ...THRESHOLD, mode: "miss" }])
+    });
+
+    await resolveDisambiguation(baseOptions(runtime, tied, "tie"));
+    await resolveDisambiguation(baseOptions(runtime, tied, "miss"));
+
+    expect(callCount).toBe(2);
+  });
+
+  it("a late (cancelled) result is never written to the cache", async () => {
+    const tied = [candidate("t1"), candidate("t2")];
+    let resolveProvider!: (value: RawDecisionResponse) => void;
+    const provider = stubProvider(
+      () =>
+        new Promise<RawDecisionResponse>((resolve) => {
+          resolveProvider = resolve;
+        })
+    );
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const pending = resolveDisambiguation(baseOptions(runtime, tied));
+    // Dispose before the provider answers — the in-flight request is
+    // aborted; when it does answer, evaluate() discards it as cancelled.
+    runtime.dispose();
+    resolveProvider(acceptedAnswerFor("t1", 0.9));
+    const { acceptedTargetId, record } = await pending;
+
+    expect(acceptedTargetId).toBeUndefined();
+    expect(record.status).not.toBe("accepted");
+    expect(runtime.decisionCache.size).toBe(0);
+  });
+});
+
 describe("DP-1: the 800ms timeout budget is real, not dead code", () => {
   it("without a shared budget, the request deadline is bound to ~800ms, not the runtime's 2000ms default", async () => {
     let observedDeadline: number | undefined;

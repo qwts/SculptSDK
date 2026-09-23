@@ -86,6 +86,14 @@ export function redactRoute(route: Pick<RouteState, "path">): string {
 
 export type RedactionRule = (text: string) => string;
 
+/** Version of the built-in scrubbing/allowlist pipeline itself (learned-value
+ * scrubbing, `ALLOWED_ATTRIBUTES`, `redactRoute`). Bump whenever that fixed
+ * behavior changes, so a decision evidence cache keyed on it (#25) can never
+ * survive the change silently. Operator-supplied `RedactionRule`s are
+ * arbitrary functions with no identity of their own — this versions only the
+ * pipeline this module controls. */
+export const REDACTION_VERSION = "v1";
+
 const REDACTED_PLACEHOLDER = "[redacted]";
 
 /**

@@ -10,4 +10,9 @@ export interface KernelEvidence {
   /** Increments on every observed route/navigation change within the same document. */
   navigationEpoch: number;
   frameId: "main" | "subframe";
+  /** The injected kernel's own build version (`KERNEL_VERSION`) — the
+   * "candidate-generation version" for anything keyed on it (#25's decision
+   * evidence cache). Optional so hand-built evidence (tests, synthetic
+   * policies) doesn't need to supply one. */
+  kernelVersion?: string;
 }
