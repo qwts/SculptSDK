@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Synonym login</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+    </style>
+  </head>
+  <body>
+    <h1>Welcome back</h1>
+    <p>A miss-only fixture for DP-1 recall (#24): no element is named "Sign in", but "Log in" is visible and enabled. Two distractors carry the same name but fail a non-text predicate, and must never be recalled.</p>
+
+    <button id="hidden-login" style="display:none">Log in</button>
+    <button id="disabled-login" disabled>Log in</button>
+    <button id="real-login" type="button">Log in</button>
+    <div class="status" id="status"></div>
+
+    <script>
+      document.getElementById("real-login").addEventListener("click", () => {
+        document.getElementById("status").textContent = "logged in";
+      });
+    </script>
+  </body>
+</html>

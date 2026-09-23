@@ -27,7 +27,12 @@ export const DEFAULT_SEMANTIC_BUDGET: Required<SemanticBudget> = {
   maxRequests: 4,
   maxConcurrency: 2,
   maxQuestionsPerRequest: 32,
-  maxOptionsPerQuestion: 32,
+  // #2's 32-candidate cap (DP1_RECALL_CAP) is a candidate count; every
+  // choice question also carries an implicit "none" option (ADR-0001), so
+  // the option-count limit needs room for 32 candidates + 1, not 32 total —
+  // otherwise a full-width recall request is silently budget-rejected
+  // before it ever reaches the provider (#24).
+  maxOptionsPerQuestion: 33,
   maxPayloadBytes: 32_000
 };
 

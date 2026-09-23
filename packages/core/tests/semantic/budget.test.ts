@@ -77,6 +77,18 @@ describe("OperationBudget", () => {
     const tooManyOptions = requestOf({}, [{ kind: "choice", id: "q1", options: ["a", "b", "c", "none"] }]);
     expect(budget.admit(tooManyOptions)?.code).toBe("budget_exhausted");
   });
+
+  it("the default budget admits a full-width #2 candidate cap (32 candidates) plus the implicit 'none' option", () => {
+    // Regression (#24): DP1_RECALL_CAP is a candidate count (#2's 32-candidate
+    // cap); every choice question also carries an implicit "none" option
+    // (ADR-0001), making 33 options total. The default must have room for
+    // both, or a full-width recall request is silently budget-rejected
+    // before it ever reaches the provider.
+    const budget = new OperationBudget();
+    const options = [...Array.from({ length: 32 }, (_, i) => `t${i}`), "none"];
+    const fullWidth = requestOf({}, [{ kind: "choice", id: "target", options }]);
+    expect(budget.admit(fullWidth)).toBeNull();
+  });
 });
 
 class StubProvider implements DecisionProvider {
