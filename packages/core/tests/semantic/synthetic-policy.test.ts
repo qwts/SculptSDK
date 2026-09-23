@@ -266,20 +266,36 @@ describe("synthetic policy — I5 (every failure class produces the declared fal
   });
 
   it("stale: freshness mismatch degrades/unsatisfies even though the answer itself validated", async () => {
+    // Wired to the real gather-to-evaluate path (not fabricated evidence
+    // literals): `capturedEvidence` comes from the same live kernel evidence
+    // `gatherAdmittedCandidates` exposes, `checkFreshness` re-reads it live,
+    // and the page actually navigates mid-flight — the same pattern
+    // #15's freshness-and-lifecycle suite uses directly against `evaluate()`.
     await withFixture(async (sculpt) => {
       const { candidates } = await gatherAdmittedCandidates(sculpt, { kind: "button", visible: true, enabled: true });
       const saveId = candidates.find((c) => c.name === "Save")!.targetId;
-      const provider = stubProvider(async () => acceptedAnswerFor(saveId));
 
-      const staleExtra = {
-        capturedEvidence: { documentId: "doc-1", navigationEpoch: 0, frameId: "main" as const },
-        checkFreshness: async () => ({ documentId: "doc-1", navigationEpoch: 1, frameId: "main" as const })
-      };
-      const { recovery, required } = await runBothVariants(
-        () => new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider }),
-        candidates,
-        staleExtra
-      );
+      async function runWithRealNavigation(degradation: "recovery_or_advisory" | "required") {
+        const capturedEvidence = await sculpt.foundation.observers.evidence();
+        const provider = stubProvider(async () => {
+          // The page navigates while this "provider call" is still in flight.
+          await sculpt.page.navigate(`${ORIGIN}/elsewhere-${degradation}`);
+          return acceptedAnswerFor(saveId);
+        });
+        const runtime = new SemanticRuntime({ settings: { semanticResolution: "enabled", actionLogging: "disabled" }, provider });
+        return runSyntheticPolicy({
+          runtime,
+          admittedCandidates: candidates,
+          origin: ORIGIN,
+          degradation,
+          capturedEvidence,
+          checkFreshness: () => sculpt.foundation.observers.evidence()
+        });
+      }
+
+      const recovery = await runWithRealNavigation("recovery_or_advisory");
+      const required = await runWithRealNavigation("required");
+
       expect(recovery.result).toMatchObject({ kind: "degraded", fallback: null, reason: { code: "stale" } });
       expect(required.result.kind).toBe("unsatisfied");
     });
