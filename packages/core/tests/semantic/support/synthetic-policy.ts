@@ -13,12 +13,15 @@
  */
 import {
   buildCandidateSummaryDTO,
+  validateDecisionResponse,
   type CandidateSummaryDTO,
   type DecisionOutcomeStatus,
   type DecisionPoint,
+  type DecisionRequest,
   type FreshnessEvidence,
   type OperationBudget,
   type QuestionOutcome,
+  type RawDecisionResponse,
   type SemanticDecisionRecord,
   type SemanticPointResult,
   type SemanticRuntime
@@ -129,39 +132,68 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
   // digest and a collision would replay a recording for different state.
   const redactedStateDigest = computeRedactedStateDigest(redactedState);
 
-  const result = await runtime.evaluate({
-    point: SYNTHETIC_POINT,
-    origin: options.origin,
-    degradation,
-    fallback: () => null,
-    buildRequest: () => ({
-      evidence: {
-        requestId: `synthetic-${Date.now()}`,
-        operationId: options.operationId ?? "synthetic-op",
-        point: SYNTHETIC_POINT,
-        model: SYNTHETIC_MODEL,
-        questionVersion: SYNTHETIC_QUESTION_VERSION,
-        policyVersion: SYNTHETIC_POLICY_VERSION,
-        origin: options.origin,
-        frameId: "main",
-        navigationEpoch: options.navigationEpoch ?? 0,
-        candidateSetDigest,
-        redactedStateDigest,
-        deadline: Date.now() + 5000,
-        signal: new AbortController().signal
+  // Intercept the single real decide() call (never an extra one — the
+  // no-extra-retries constraint holds) just to capture the exact
+  // request/response pair. `evaluate()` itself never calls `select()` when
+  // validation finds an invalid answer, so without this the record's
+  // `outcomes` would be silently empty on exactly the adversarial path this
+  // consumer exists to exercise. Restored in `finally` either way.
+  const provider = runtime.provider;
+  const originalDecide = provider.decide.bind(provider);
+  let lastExchange: { request: DecisionRequest; raw: RawDecisionResponse } | undefined;
+  provider.decide = async (request: DecisionRequest) => {
+    const raw = await originalDecide(request);
+    lastExchange = { request, raw };
+    return raw;
+  };
+
+  let result: SemanticPointResult<null, string>;
+  try {
+    result = await runtime.evaluate({
+      point: SYNTHETIC_POINT,
+      origin: options.origin,
+      degradation,
+      fallback: () => null,
+      buildRequest: () => ({
+        evidence: {
+          requestId: `synthetic-${Date.now()}`,
+          operationId: options.operationId ?? "synthetic-op",
+          point: SYNTHETIC_POINT,
+          model: SYNTHETIC_MODEL,
+          questionVersion: SYNTHETIC_QUESTION_VERSION,
+          policyVersion: SYNTHETIC_POLICY_VERSION,
+          origin: options.origin,
+          frameId: "main",
+          navigationEpoch: options.navigationEpoch ?? 0,
+          candidateSetDigest,
+          redactedStateDigest,
+          deadline: Date.now() + 5000,
+          signal: new AbortController().signal
+        },
+        questions: [{ kind: "choice", id: "target", options: optionIds }],
+        redactedState
+      }),
+      select: (outcomes) => {
+        capturedOutcomes = outcomes;
+        const accepted = outcomes.find((o) => o.status === "accepted");
+        if (accepted?.accepted?.answer.kind !== "choice") return undefined;
+        return accepted.accepted.answer.selected;
       },
-      questions: [{ kind: "choice", id: "target", options: optionIds }],
-      redactedState
-    }),
-    select: (outcomes) => {
-      capturedOutcomes = outcomes;
-      const accepted = outcomes.find((o) => o.status === "accepted");
-      if (accepted?.accepted?.answer.kind !== "choice") return undefined;
-      return accepted.accepted.answer.selected;
-    },
-    capturedEvidence: options.capturedEvidence,
-    checkFreshness: options.checkFreshness
-  }, { budget: options.budget });
+      capturedEvidence: options.capturedEvidence,
+      checkFreshness: options.checkFreshness
+    }, { budget: options.budget });
+  } finally {
+    provider.decide = originalDecide;
+  }
+
+  // Validation finds an invalid answer, `evaluate()` returns before calling
+  // `select()` above, so `capturedOutcomes` is empty even though a real
+  // response came back — reconstruct it from the exact captured exchange
+  // with the same public validator the runtime used internally, so the
+  // record still carries the specific per-question rejection reason.
+  if (capturedOutcomes.length === 0 && lastExchange) {
+    capturedOutcomes = validateDecisionResponse(lastExchange.request, lastExchange.raw).outcomes;
+  }
 
   const latencyMs = Date.now() - startedAt;
   const admittedIds = admittedCandidates.map((c) => c.targetId);

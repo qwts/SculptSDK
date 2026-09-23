@@ -262,6 +262,15 @@ describe("synthetic policy — I5 (every failure class produces the declared fal
       );
       expect(recovery.result).toEqual({ kind: "degraded", fallback: null, reason: { code: "invalid_answer" } });
       expect(required.result.kind).toBe("unsatisfied");
+
+      // Regression (Codex finding on #17): SemanticRuntime.evaluate() never
+      // calls select() once validation finds an invalid outcome, so the
+      // record must reconstruct it another way — it must not just say
+      // "invalid" overall, it must carry *why*.
+      expect(recovery.record.outcomes).toEqual([
+        { questionId: "target", status: "invalid", reason: { code: "foreign_candidate", detail: expect.stringContaining("not-in-the-option-set") } }
+      ]);
+      expect(required.record.outcomes).toEqual(recovery.record.outcomes);
     });
   });
 
