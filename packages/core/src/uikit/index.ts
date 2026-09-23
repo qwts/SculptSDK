@@ -207,7 +207,13 @@ export class UIForm extends UIElement {
       values
     });
     if (options.submit && result.ok) {
-      await this.submit(options);
+      const submitResult = await this.submit(options);
+      if (!submitResult.ok) {
+        // The fill itself succeeded, but the caller asked for submit and
+        // didn't get it — never report success for a submission that never
+        // happened (e.g. a #22 guard mismatch after a fill-induced rerender).
+        return { ...result, ok: false, submitError: submitResult.error };
+      }
     }
     return result;
   }
@@ -461,11 +467,16 @@ export class UIRoot {
  *   await sculpt.ui.button({...}).click();
  */
 export type LazyHandle<T> = PromiseLike<T> & {
+  // The runtime always defers through the underlying promise, so every lazy
+  // method call is async regardless of whether the resolved method itself
+  // is sync (e.g. `guardFrom`) or already async — the type must say so too,
+  // or a lazy call on a sync method type-checks as sync but returns a
+  // Promise at runtime.
   [K in keyof T as T[K] extends (...args: never[]) => unknown ? K : never]: T[K] extends (
     ...args: infer A
-  ) => Promise<infer R>
-    ? (...args: A) => Promise<R>
-    : T[K];
+  ) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : never;
 };
 
 const LAZY_METHODS = [
@@ -484,7 +495,8 @@ const LAZY_METHODS = [
   "extract",
   "value",
   "explain",
-  "describe"
+  "describe",
+  "guardFrom"
 ] as const;
 
 function lazy<T extends UIElement>(promise: Promise<T>): LazyHandle<T> {

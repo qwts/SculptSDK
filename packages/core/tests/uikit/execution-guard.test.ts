@@ -116,4 +116,26 @@ describe("execution guard: never rebinds implicitly", () => {
       expect(replacementClicked).toBe(true);
     });
   });
+
+  it("guardFrom works on a lazy handle, not just an already-resolved UIElement", async () => {
+    // Regression (Cursor Bugbot finding on #22/#35): guardFrom wasn't in
+    // LAZY_METHODS, so sculpt.ui.button(...).guardFrom(evidence) type-checked
+    // but threw "has no method guardFrom" at runtime.
+    await withFixture(async (sculpt, adapter) => {
+      let clicked = false;
+      adapter.document.getElementById("save-btn")?.addEventListener("click", () => {
+        clicked = true;
+      });
+
+      const evidence = await sculpt.foundation.observers.evidence();
+      const guard = await sculpt.ui.button({ name: "Save" }).guardFrom(evidence);
+
+      expect(guard.rebind).toBe("forbid");
+      expect(guard.documentId).toBe(evidence.documentId);
+
+      const result = await sculpt.ui.button({ name: "Save" }).click({ guard });
+      expect(result.ok).toBe(true);
+      expect(clicked).toBe(true);
+    });
+  });
 });
