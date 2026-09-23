@@ -14,7 +14,9 @@
       "default": "./dist/kernel/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build:kernel": "node scripts/build-kernel.mjs",
     "build": "node scripts/build-kernel.mjs && tsc -p tsconfig.json",

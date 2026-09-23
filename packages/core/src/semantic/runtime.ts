@@ -44,6 +44,9 @@ export interface SemanticAttachOptions {
    * none — every decision point runs in shadow mode until an operator
    * supplies real artifacts. */
   calibration?: CalibrationRegistry;
+  /** Bounds the #25 session-scoped decision evidence cache. Defaults to the
+   * runtime's own default (100) when omitted. */
+  decisionCacheMaxEntries?: number;
 }
 
 export interface SemanticPointConfig<TFallback, TAccepted> {

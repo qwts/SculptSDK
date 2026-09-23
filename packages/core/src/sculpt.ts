@@ -90,7 +90,8 @@ export class Sculpt {
       sourceOriginAllowlist: options.semantic?.sourceOriginAllowlist,
       providerEndpointAllowlist: options.semantic?.providerEndpointAllowlist,
       redactionRules: options.semantic?.redactionRules,
-      calibration: options.semantic?.calibration
+      calibration: options.semantic?.calibration,
+      decisionCacheMaxEntries: options.semantic?.decisionCacheMaxEntries
     });
     const consumedGrants = new ConsumedGrantRegistry();
     const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic, consumedGrants };
