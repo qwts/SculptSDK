@@ -206,7 +206,10 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
           detail: `rebound via ${resolution.rebound.strategy} (confidence ${resolution.rebound.confidence})`
         });
       }
-      target = { targetId: resolution.summary.targetId, identity: resolution.identity };
+      // Preserve the #22 guard across the retry loop — it must keep
+      // re-validating on every subsequent kernel call for this attempt,
+      // not just the initial resolve().
+      target = { targetId: resolution.summary.targetId, identity: resolution.identity, guard: target.guard };
       summary = resolution.summary;
       spec.onResolved?.(resolution);
 

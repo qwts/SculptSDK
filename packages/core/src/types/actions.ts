@@ -1,5 +1,6 @@
 import type { BrowserCapabilities } from "./capabilities.js";
 import type { TargetSummary } from "./refs.js";
+import type { ExecutionGuard } from "./identity.js";
 import type { TextMatcher, WireMatcher } from "./matchers.js";
 import { serializeMatcher } from "./matchers.js";
 import type { UIQuery } from "./queries.js";
@@ -74,6 +75,9 @@ export interface ActionOptions {
   after?: ActionAfterOptions;
   /** Force a specific input mode instead of the capability-based preference order. */
   mode?: InputMode;
+  /** #22: bind this action to the page state a decision was made against.
+   * A mismatch fails closed with a typed stale error; it never rebinds. */
+  guard?: ExecutionGuard;
 }
 
 export interface ClickOptions extends ActionOptions {

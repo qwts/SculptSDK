@@ -5,6 +5,7 @@ import type {
   ClickOptions,
   CloseOptions,
   ElementIdentity,
+  ExecutionGuard,
   FormFillOptions,
   FormFillResult,
   SetValueOptions,
@@ -65,8 +66,20 @@ export class UIElement {
     return this.summary.enabled !== false;
   }
 
-  protected target(): KernelTarget {
-    return { targetId: this.summary.targetId, identity: this.identity };
+  protected target(guard?: ExecutionGuard): KernelTarget {
+    return { targetId: this.summary.targetId, identity: this.identity, guard };
+  }
+
+  /** Builds the #22 guard binding a mutation to this handle's identity at
+   * the given evidence — the shape a decision-point policy captures when it
+   * makes its choice, e.g. from `queryWithEvidence()` or `observers.evidence()`. */
+  guardFrom(evidence: { documentId: string; navigationEpoch: number }): ExecutionGuard {
+    return {
+      documentId: evidence.documentId,
+      navigationEpoch: evidence.navigationEpoch,
+      targetDigest: this.identity.id,
+      rebind: "forbid"
+    };
   }
 
   /** Keeps the handle fresh after the action runner rebinds a stale target. */
@@ -88,7 +101,7 @@ export class UIElement {
   async click(options: ClickOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "click",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -115,7 +128,7 @@ export class UIInput extends UIElement {
   async setValue(value: unknown, options: SetValueOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "set-value",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -134,7 +147,7 @@ export class UIInput extends UIElement {
   async type(text: string, options: ActionOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "type",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -147,7 +160,7 @@ export class UIInput extends UIElement {
   async clear(options: ClearOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "clear",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -162,7 +175,7 @@ export class UISelect extends UIInput {
   async select(value: string | string[], options: ActionOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "select",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       onResolved: this.trackResolution(),
       execute: async (target) => {
@@ -187,7 +200,7 @@ export class UIForm extends UIElement {
 
   async fill(values: Record<string, unknown>, options: FormFillOptions = {}): Promise<FormFillResult> {
     const result = await this.env.kernel.call<FormFillResult>("formFill", {
-      target: this.target(),
+      target: this.target(options.guard),
       values
     });
     if (options.submit && result.ok) {
@@ -199,7 +212,7 @@ export class UIForm extends UIElement {
   async submit(options: SubmitOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "submit",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       validationScope: this.target(),
       // Forms themselves are containers; their own occlusion is irrelevant.
@@ -246,7 +259,7 @@ export class UIDialog extends UIElement {
   async close(options: CloseOptions = {}): Promise<ActionResult> {
     return runAction(this.env, {
       action: "close-dialog",
-      target: this.target(),
+      target: this.target(options.guard),
       options,
       defaultPreconditions: { mustNotBeOccluded: false },
       onResolved: this.trackResolution(),

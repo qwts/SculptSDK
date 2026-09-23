@@ -1,5 +1,5 @@
 import type { TargetSummary } from "../types/refs.js";
-import type { ElementIdentity } from "../types/identity.js";
+import type { ElementIdentity, ExecutionGuard } from "../types/identity.js";
 import type { KernelEvidence } from "../types/evidence.js";
 import type { WireUIQuery, QueryCandidate } from "../types/queries.js";
 import type { AnyWindow, KernelContext, KernelOptions } from "./context.js";
@@ -21,9 +21,11 @@ import { computeIdentity, rebindIdentity } from "./identity.js";
 import { buildSnapshot, closeDialog, dialogInfo, extractTable } from "./snapshot.js";
 import { detectFrameworks } from "./frameworks.js";
 
-// Bumped for §15: query results and the new `evidence` op carry read-only
-// per-injection document identity, a navigation epoch, and a frame id.
-export const KERNEL_VERSION = "0.2.0";
+// Bumped for §22: a target argument can carry an execution guard that
+// forbids implicit rebinding and fails closed on any document/navigation/
+// identity mismatch. Additive — a target with no guard behaves exactly as
+// before.
+export const KERNEL_VERSION = "0.3.0";
 
 export interface KernelCallEnvelope {
   ok: boolean;
@@ -38,7 +40,7 @@ export interface KernelApi {
 }
 
 interface TargetArg {
-  target?: { targetId?: string; identity?: ElementIdentity };
+  target?: { targetId?: string; identity?: ElementIdentity; guard?: ExecutionGuard };
 }
 
 export type { AnyWindow, KernelOptions } from "./context.js";
@@ -75,11 +77,49 @@ export function createKernel(win: AnyWindow, options: KernelOptions = {}): Kerne
     rebound: { confidence: number; strategy: string } | null;
   }
 
+  /**
+   * §22: under a guard, resolution never falls back to `rebindIdentity` — a
+   * mismatch on any of document identity, navigation epoch or the target's
+   * own identity digest fails closed with a typed stale error instead.
+   */
+  const resolveGuarded = (target: NonNullable<TargetArg["target"]>, guard: ExecutionGuard): Resolution => {
+    const staleError = (reason: string, extra?: Record<string, unknown>): KernelError =>
+      new KernelError("TARGET_STALE", `execution guard failed: ${reason}`, {
+        targetId: target.targetId,
+        guardReason: reason,
+        ...extra
+      });
+    if (ctx.state.documentId !== guard.documentId) {
+      throw staleError("document identity changed since the guard was captured", {
+        expected: guard.documentId,
+        actual: ctx.state.documentId
+      });
+    }
+    if (ctx.state.navigationEpoch !== guard.navigationEpoch) {
+      throw staleError("navigation epoch changed since the guard was captured", {
+        expected: guard.navigationEpoch,
+        actual: ctx.state.navigationEpoch
+      });
+    }
+    if (!target.targetId) throw staleError("no target handle to validate under a guard");
+    const el = ctx.refs.get(target.targetId);
+    if (!el?.isConnected) throw staleError("target handle is gone; the guard forbids rebinding");
+    const identity = computeIdentity(ctx, el);
+    if (identity.id !== guard.targetDigest) {
+      throw staleError("target identity changed; the guard forbids rebinding", {
+        expected: guard.targetDigest,
+        actual: identity.id
+      });
+    }
+    return { el, rebound: null };
+  };
+
   const resolveTarget = (args: TargetArg | undefined): Resolution => {
     const target = args?.target;
     if (!target?.targetId && !target?.identity) {
       throw new KernelError("TARGET_NOT_FOUND", "no target reference provided");
     }
+    if (target.guard) return resolveGuarded(target, target.guard);
     if (target.targetId) {
       const el = ctx.refs.get(target.targetId);
       if (el?.isConnected) return { el, rebound: null };
