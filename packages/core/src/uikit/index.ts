@@ -21,7 +21,7 @@ import type { QueryCandidate } from "../types/queries.js";
 import { serializeQuery } from "../types/queries.js";
 import type { DomNode, FormFieldSummary, DialogSummary } from "../types/index.js";
 import type { ActionEnv } from "./action-runner.js";
-import { runAction } from "./action-runner.js";
+import { runAction, checkRiskFloorForTarget } from "./action-runner.js";
 import type { KernelTarget } from "../foundation/index.js";
 import { SculptError } from "../errors.js";
 import { DP1_POINT, DP1_RECALL_CAP, resolveDisambiguation, type SemanticDecisionRecord } from "../semantic/index.js";
@@ -202,6 +202,22 @@ export class UIForm extends UIElement {
   }
 
   async fill(values: Record<string, unknown>, options: FormFillOptions = {}): Promise<FormFillResult> {
+    if (options.submit) {
+      // #26: check the floor against the form's *pre-fill* state.
+      // `formFill` below dispatches input/change events that a page's own
+      // handlers could react to by altering the form's action/text — an
+      // already-laundered, benign-looking state is exactly what
+      // `submit()`'s own post-fill check could otherwise be fooled by.
+      // Reported the same way `submit()`'s own failure is (a resolved
+      // `{ ok: false, submitError }`, never a thrown rejection) so callers
+      // don't need two different failure shapes for the same option.
+      try {
+        await checkRiskFloorForTarget(this.env, this.target(options.guard), this.summary);
+      } catch (caught) {
+        if (!(caught instanceof SculptError)) throw caught;
+        return { ok: false, filled: [], unmapped: [], ambiguous: [], validationErrors: [], submitError: caught };
+      }
+    }
     const result = await this.env.kernel.call<FormFillResult>("formFill", {
       target: this.target(options.guard),
       values
