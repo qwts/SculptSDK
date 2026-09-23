@@ -69,6 +69,11 @@ describe("DP-7: shadow mode without a matching calibration artifact", () => {
     expect(record.status).toBe("abstained");
     // The provider's actual answers are still captured for future calibration.
     expect(record.outcomes).toHaveLength(5);
+    // Collision-resistant SHA-256 hex, not the 32-bit djb2 this replaced —
+    // this digest gates the freshness comparison a change elsewhere in this
+    // suite now actually exercises.
+    expect(record.candidateSetDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(record.redactedStateDigest).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 
@@ -179,6 +184,95 @@ describe("DP-7: degradation classes", () => {
 
     const { requiredButUnavailable } = await resolveRiskPredicates(baseOptions(runtime));
     expect(requiredButUnavailable).toBe(true);
+  });
+
+  it("required: shadow mode (no calibration artifact) never hard-stops — that's not what 'required' documents", async () => {
+    // Before the fix: select() returning undefined because there's no
+    // threshold to score against was indistinguishable from a genuinely
+    // unusable answer, so setting dp7RiskDegradation: "required" with no
+    // #21 artifact yet blocked every floor-missing click/submit outright.
+    const provider = stubProvider(async () => probabilityAnswers({ destructive: 0.99 }));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      dp7RiskDegradation: "required"
+      // No calibration registry — shadow mode.
+    });
+
+    const { escalate, requiredButUnavailable, record } = await resolveRiskPredicates(baseOptions(runtime));
+    expect(requiredButUnavailable).toBe(false);
+    expect(escalate).toBe(false);
+    expect(record.status).toBe("abstained");
+  });
+});
+
+describe("DP-7: freshness — the target's own signals are re-read, not just document evidence", () => {
+  it("a signal change without navigation is caught as stale, not silently accepted", async () => {
+    const provider = stubProvider(async () => probabilityAnswers({ destructive: 0.9 }));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { escalate, record } = await resolveRiskPredicates({
+      ...baseOptions(runtime),
+      checkFreshness: async () => ({
+        evidence: { documentId: "doc-1", navigationEpoch: 0, frameId: "main" as const },
+        // Same document, no navigation — but the target's own accessible
+        // name/text changed since the request was built. Reusing the
+        // captured digest here (the pre-fix behavior) could never notice
+        // this.
+        signals: { accessibleName: "Cancel", text: "Cancel this item" }
+      })
+    });
+
+    expect(escalate).toBe(false);
+    expect(record.status).toBe("stale");
+  });
+
+  it("unchanged signals still accept the answer", async () => {
+    const provider = stubProvider(async () => probabilityAnswers({ destructive: 0.9 }));
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD])
+    });
+
+    const { escalate, record } = await resolveRiskPredicates({
+      ...baseOptions(runtime),
+      checkFreshness: async () => ({
+        evidence: { documentId: "doc-1", navigationEpoch: 0, frameId: "main" as const },
+        signals: { accessibleName: "Archive", text: "Archive this item" }
+      })
+    });
+
+    expect(escalate).toBe(true);
+    expect(record.status).toBe("accepted");
+  });
+});
+
+describe("DP-7: a denied origin is never read or redacted", () => {
+  it("the request is never built (nothing redacted, provider never called) for a denied origin", async () => {
+    let providerCalled = false;
+    const provider = stubProvider(async () => {
+      providerCalled = true;
+      return probabilityAnswers();
+    });
+    const runtime = new SemanticRuntime({
+      settings: { semanticResolution: "enabled", actionLogging: "disabled" },
+      provider,
+      calibration: new StaticCalibrationRegistry([THRESHOLD]),
+      sourceOriginAllowlist: ["http://a-different-origin.local"]
+    });
+
+    const { escalate, record } = await resolveRiskPredicates(baseOptions(runtime));
+    expect(escalate).toBe(false);
+    expect(providerCalled).toBe(false);
+    // "n/a", not a real digest — buildRequest() (where redaction happens)
+    // never ran, because origin admission is checked before it.
+    expect(record.candidateSetDigest).toBe("n/a");
+    expect(record.redactedStateDigest).toBe("n/a");
   });
 });
 

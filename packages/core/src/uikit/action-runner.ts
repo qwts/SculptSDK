@@ -292,7 +292,14 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
             intent: `${actionType} on ${summary.role ?? summary.kind ?? "element"} "${summary.name ?? ""}"`,
             routePath: route.path,
             documentEvidence: await env.foundation.observers.evidence(),
-            checkFreshness: () => env.foundation.observers.evidence()
+            // Re-reads the target's own risk signals, not just document
+            // evidence — a digest recomputed from a stale snapshot could
+            // never detect the page's text/name/action changing under it
+            // without a navigation (#28 review finding).
+            checkFreshness: async () => ({
+              evidence: await env.foundation.observers.evidence(),
+              signals: await env.kernel.call<RiskFloorSignals>("riskSignals", { target })
+            })
           });
           // A required check that couldn't run is a hard stop: never
           // routed through grant verification below — there is no

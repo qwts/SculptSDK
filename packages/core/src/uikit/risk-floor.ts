@@ -68,11 +68,19 @@ export function checkRiskFloor(signals: RiskFloorSignals): string | undefined {
   );
 }
 
-export function confirmationRequiredError(keyword: string, summary: TargetSummary | undefined): SculptError {
+/** `matched` is either a keyword this module itself matched, or the literal
+ * `"semantic-risk"` a caller passes when #28's semantic predicates escalated
+ * where the floor missed — `details.reason` reflects which one actually
+ * fired so a host can tell a keyword hit from a semantic-only one apart
+ * (they were previously indistinguishable: this always reported
+ * `"deterministic-floor"`, even for a semantic-only escalation). */
+export function confirmationRequiredError(matched: string, summary: TargetSummary | undefined): SculptError {
+  const reason = matched === "semantic-risk" ? "semantic-risk" : "deterministic-floor";
+  const description = reason === "semantic-risk" ? "DP-7's semantic risk predicates" : `the deterministic risk floor matched "${matched}"`;
   return new SculptError(
     "CONFIRMATION_REQUIRED",
-    `the deterministic risk floor matched "${keyword}" — this action needs confirmation before it can run`,
-    { layer: "uikit", target: summary, details: { matchedKeyword: keyword, reason: "deterministic-floor" } }
+    `${description} — this action needs confirmation before it can run`,
+    { layer: "uikit", target: summary, details: { matchedKeyword: matched, reason } }
   );
 }
 

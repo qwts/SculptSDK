@@ -57,4 +57,15 @@ describe("confirmationRequiredError", () => {
     expect(error.retryable).toBe(false);
     expect(error.details?.matchedKeyword).toBe("delete");
   });
+
+  it("a keyword match reports reason \"deterministic-floor\"", () => {
+    const error = confirmationRequiredError("delete", { targetId: "t1", name: "Delete account" });
+    expect(error.details?.reason).toBe("deterministic-floor");
+  });
+
+  it("a DP-7 semantic-only escalation reports reason \"semantic-risk\" — distinct from a keyword floor hit", () => {
+    const error = confirmationRequiredError("semantic-risk", { targetId: "t1", name: "Archive" });
+    expect(error.details?.reason).toBe("semantic-risk");
+    expect(error.details?.matchedKeyword).toBe("semantic-risk");
+  });
 });

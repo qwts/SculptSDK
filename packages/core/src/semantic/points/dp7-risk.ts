@@ -5,13 +5,14 @@
  * floor already missed, so semantic evidence can add friction to an action
  * but can never remove it (I3/I5 as rewritten in the technical review).
  */
+import { createHash } from "node:crypto";
 import type { OperationBudget } from "../budget.js";
 import type { KernelEvidence } from "../../types/evidence.js";
 import type { FreshnessEvidence } from "../freshness.js";
-import { buildRiskSignalsDTO } from "../redaction.js";
+import { buildRiskSignalsDTO, type RiskSignalsDTO } from "../redaction.js";
 import { checkModelSupport, type DecisionPoint, type DecisionRequest, type ProbabilityQuestion } from "../provider.js";
 import type { SemanticDecisionRecord } from "../records.js";
-import type { DegradationClass, SemanticRuntime } from "../runtime.js";
+import type { SemanticRuntime } from "../runtime.js";
 import type { QuestionOutcome } from "../validate.js";
 
 export const DP7_POINT: DecisionPoint = "dp7-risk";
@@ -37,12 +38,12 @@ export const DP7_PREDICATE_IDS = [
 ] as const;
 export type Dp7PredicateId = (typeof DP7_PREDICATE_IDS)[number];
 
-function djb2(input: string): string {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i++) {
-    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0;
-  }
-  return (hash >>> 0).toString(16);
+/** SHA-256, not a fast non-cryptographic hash: `candidateSetDigest` gates
+ * the #15 freshness comparison (`isFresh`) this module recomputes fresh
+ * signals against (review finding) — a collision there would let a
+ * genuinely changed target still compare as "fresh". */
+function digest(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
 export interface Dp7RiskSignals {
@@ -61,7 +62,11 @@ export interface Dp7RiskOptions {
   intent: string;
   routePath: string;
   documentEvidence: KernelEvidence;
-  checkFreshness?: () => Promise<KernelEvidence>;
+  /** Re-reads the target's *current* risk signals, not just document
+   * evidence — a freshness check that only compared document/navigation
+   * identity could never notice the target's own text/name/action changing
+   * under it without a full navigation (review finding). */
+  checkFreshness?: () => Promise<{ evidence: KernelEvidence; signals: Dp7RiskSignals }>;
   operationId?: string;
   budget?: OperationBudget;
 }
@@ -110,11 +115,9 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
     return { escalate: false, requiredButUnavailable: runtime.dp7RiskDegradation === "required", record };
   }
 
-  const redactedSignals = buildRiskSignalsDTO(options.signals, runtime.redactor);
-  const intent = runtime.redactor.text(options.intent) ?? options.intent;
-  const routePath = runtime.redactor.text(options.routePath) ?? options.routePath;
-  const candidateSetDigest = djb2(`${options.actionType}:${redactedSignals.accessibleName ?? ""}`);
-  const redactedStateDigest = djb2(JSON.stringify({ signals: redactedSignals, intent, route: routePath }));
+  function candidateSetDigestOf(redactedSignals: RiskSignalsDTO): string {
+    return digest(`${options.actionType}:${redactedSignals.accessibleName ?? ""}`);
+  }
 
   const threshold = runtime.calibration.lookup({
     point: DP7_POINT,
@@ -127,12 +130,20 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
   const questions: ProbabilityQuestion[] = DP7_PREDICATE_IDS.map((id) => ({ kind: "probability", id }));
   let capturedOutcomes: QuestionOutcome[] = [];
 
+  // Filled in by `buildRequest()` below — `evaluate()` only calls it after
+  // origin admission passes, so nothing page-derived is redacted (or even
+  // read) for a denied origin (review finding). `capturedEvidence` is a
+  // plain object `evaluate()` reads later (well after `buildRequest()` has
+  // already run), so mutating it in place here is enough to thread the
+  // digest through without exposing redaction to the pre-admission path.
   const capturedEvidence: FreshnessEvidence = {
     documentId: options.documentEvidence.documentId,
     navigationEpoch: options.documentEvidence.navigationEpoch,
     frameId: options.documentEvidence.frameId,
-    candidateSetDigest
+    candidateSetDigest: undefined
   };
+  let candidateSetDigestForRecord = "n/a";
+  let redactedStateDigestForRecord = "n/a";
 
   const result = await runtime.evaluate(
     {
@@ -140,25 +151,35 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
       origin: options.origin,
       degradation: runtime.dp7RiskDegradation,
       fallback: () => false,
-      buildRequest: (): DecisionRequest => ({
-        evidence: {
-          requestId: `dp7-${Date.now()}`,
-          operationId: options.operationId ?? `dp7-op-${Date.now()}`,
-          point: DP7_POINT,
-          model: DP7_MODEL,
-          questionVersion: DP7_QUESTION_VERSION,
-          policyVersion: DP7_POLICY_VERSION,
-          origin: options.origin,
-          frameId: "main",
-          navigationEpoch: options.documentEvidence.navigationEpoch,
-          candidateSetDigest,
-          redactedStateDigest,
-          deadline: Date.now() + 800,
-          signal: new AbortController().signal
-        },
-        questions,
-        redactedState: { signals: redactedSignals, intent, route: routePath, actionType: options.actionType }
-      }),
+      buildRequest: (): DecisionRequest => {
+        const redactedSignals = buildRiskSignalsDTO(options.signals, runtime.redactor);
+        const intent = runtime.redactor.text(options.intent) ?? options.intent;
+        const routePath = runtime.redactor.text(options.routePath) ?? options.routePath;
+        const candidateSetDigest = candidateSetDigestOf(redactedSignals);
+        const redactedStateDigest = digest(JSON.stringify({ signals: redactedSignals, intent, route: routePath }));
+        capturedEvidence.candidateSetDigest = candidateSetDigest;
+        candidateSetDigestForRecord = candidateSetDigest;
+        redactedStateDigestForRecord = redactedStateDigest;
+        return {
+          evidence: {
+            requestId: `dp7-${Date.now()}`,
+            operationId: options.operationId ?? `dp7-op-${Date.now()}`,
+            point: DP7_POINT,
+            model: DP7_MODEL,
+            questionVersion: DP7_QUESTION_VERSION,
+            policyVersion: DP7_POLICY_VERSION,
+            origin: options.origin,
+            frameId: "main",
+            navigationEpoch: options.documentEvidence.navigationEpoch,
+            candidateSetDigest,
+            redactedStateDigest,
+            deadline: Date.now() + 800,
+            signal: new AbortController().signal
+          },
+          questions,
+          redactedState: { signals: redactedSignals, intent, route: routePath, actionType: options.actionType }
+        };
+      },
       // §21 (not built in m1): without a matching calibration artifact,
       // DP-7 runs in shadow mode — record what the provider said, escalate
       // nothing. Combined with OR, never summed: any single accepted
@@ -171,10 +192,20 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
         );
       },
       capturedEvidence,
+      // Re-reads the target's own risk signals and recomputes the digest
+      // from them — reusing the digest captured at request-build time here
+      // would make this check blind to any content change that isn't also
+      // a navigation (review finding).
       checkFreshness: options.checkFreshness
         ? async () => {
             const current = await options.checkFreshness!();
-            return { documentId: current.documentId, navigationEpoch: current.navigationEpoch, frameId: current.frameId, candidateSetDigest };
+            const currentRedactedSignals = buildRiskSignalsDTO(current.signals, runtime.redactor);
+            return {
+              documentId: current.evidence.documentId,
+              navigationEpoch: current.evidence.navigationEpoch,
+              frameId: current.evidence.frameId,
+              candidateSetDigest: candidateSetDigestOf(currentRedactedSignals)
+            };
           }
         : undefined
     },
@@ -182,7 +213,13 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
   );
 
   const escalate = result.kind === "accepted" ? result.value : false;
-  const requiredButUnavailable = result.kind === "unsatisfied";
+  // "required" is documented to hard-stop on a provider outage, timeout, or
+  // invalid answer — never on shadow mode simply choosing not to score
+  // anything (no calibration artifact). Without this, setting
+  // dp7RiskDegradation: "required" with no #21 artifact yet would hard-stop
+  // every floor-missing click/submit, which shadow mode is specifically
+  // supposed to never do (review finding).
+  const requiredButUnavailable = result.kind === "unsatisfied" && !(result.reason.code === "abstained" && !threshold);
 
   const record: SemanticDecisionRecord = {
     point: DP7_POINT,
@@ -190,8 +227,8 @@ export async function resolveRiskPredicates(options: Dp7RiskOptions): Promise<Dp
     model: DP7_MODEL,
     questionVersion: DP7_QUESTION_VERSION,
     policyVersion: DP7_POLICY_VERSION,
-    candidateSetDigest,
-    redactedStateDigest,
+    candidateSetDigest: candidateSetDigestForRecord,
+    redactedStateDigest: redactedStateDigestForRecord,
     outcomes: capturedOutcomes,
     status:
       result.kind === "accepted"
