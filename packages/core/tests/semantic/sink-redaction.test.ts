@@ -21,6 +21,7 @@ import {
  */
 
 const SECRET_VALUE = "correcthorsebatterystaple";
+const ORIGIN = "http://fixtures.local";
 const QUESTION: ChoiceQuestion = { kind: "choice", id: "q1", options: ["a", "none"] };
 
 function echoedSinks(secret: string) {
@@ -65,7 +66,7 @@ function evidenceFor(overrides: Partial<DecisionEvidence> = {}): DecisionEvidenc
     model: "test-model",
     questionVersion: "v1",
     policyVersion: "v1",
-    origin: "http://fixtures.local",
+    origin: ORIGIN,
     frameId: "main",
     navigationEpoch: 0,
     candidateSetDigest: "cd",
@@ -86,6 +87,7 @@ function pointConfig(
   runtime.redactor.learn(SECRET_VALUE);
   return {
     point: "synthetic-redaction-point",
+    origin: ORIGIN,
     degradation: "recovery_or_advisory",
     fallback: () => "fallback-value",
     buildRequest: () => ({
@@ -233,17 +235,23 @@ describe("source-origin allowlist is separate from the provider-endpoint allowli
       providerEndpointAllowlist: ["https://provider.example"] // deliberately unrelated to the source-origin check
     });
 
+    let buildRequestCalls = 0;
     const config = pointConfig(runtime, {
-      buildRequest: () => ({
-        evidence: evidenceFor({ origin: "https://not-allowed.example" }),
-        questions: [QUESTION]
-      })
+      origin: "https://not-allowed.example",
+      buildRequest: () => {
+        buildRequestCalls++;
+        return { evidence: evidenceFor({ origin: "https://not-allowed.example" }), questions: [QUESTION] };
+      }
     });
 
     const result = await runtime.evaluate(config);
 
     expect(result).toMatchObject({ kind: "degraded", reason: { code: "origin_not_allowed" } });
     expect(provider.lastRequest).toBeUndefined(); // never called
+    // buildRequest() itself must never run for a denied origin — it could
+    // read and learn from page state (e.g. via runtime.redactor.learn())
+    // before the origin was ever checked.
+    expect(buildRequestCalls).toBe(0);
   });
 
   it("stores the two allowlists independently — configuring one never affects the other", () => {

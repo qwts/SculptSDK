@@ -42,6 +42,11 @@ export interface SemanticAttachOptions {
 
 export interface SemanticPointConfig<TFallback, TAccepted> {
   point: DecisionPoint;
+  /** The page origin this request would be built from, checked against
+   * `sourceOriginAllowlist` *before* `buildRequest()` is ever called (§16) —
+   * a denied origin's page state is never read, not even just to redact it
+   * or learn a value from it. */
+  origin: string;
   degradation: DegradationClass;
   /** Today's deterministic behavior for this point, unchanged. */
   fallback: () => TFallback;
@@ -178,18 +183,20 @@ export class SemanticRuntime {
     const budget = options.budget ?? this.createOperationBudget();
 
     try {
-      const request = config.buildRequest();
-
-      if (this.sourceOriginAllowlist && !this.sourceOriginAllowlist.includes(request.evidence.origin)) {
+      // Origin admission happens strictly before buildRequest() — a denied
+      // origin's page state must never be read at all, not even to redact
+      // it or learn a value from it (§16 review finding).
+      if (this.sourceOriginAllowlist && !this.sourceOriginAllowlist.includes(config.origin)) {
         return this.finish(
           config,
           this.degradeOrUnsatisfy(config, {
             code: "origin_not_allowed",
-            detail: `origin "${request.evidence.origin}" is not in the configured source-origin allowlist`
+            detail: `origin "${config.origin}" is not in the configured source-origin allowlist`
           })
         );
       }
 
+      const request = config.buildRequest();
       const admitted = budget.admit(request);
       if (admitted) {
         return this.finish(config, this.degradeOrUnsatisfy(config, admitted));
