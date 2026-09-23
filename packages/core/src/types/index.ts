@@ -10,3 +10,4 @@ export * from "./snapshot.js";
 export * from "./agent.js";
 export * from "./adapter.js";
 export * from "./evidence.js";
+export * from "./confirmation.js";

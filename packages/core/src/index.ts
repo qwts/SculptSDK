@@ -37,6 +37,15 @@ export {
 export type { ActionEnv, OrchestrationDefaults, ActionSpec, UIExplanation, LazyHandle } from "./uikit/index.js";
 export { checkRiskFloor, confirmationRequiredError, RISK_FLOOR_KEYWORDS } from "./uikit/risk-floor.js";
 export type { RiskFloorSignals } from "./uikit/risk-floor.js";
+export {
+  computeFormValuesDigest,
+  confirmationGrantInvalidError,
+  verifyConfirmationGrant,
+  ConsumedGrantRegistry,
+  CLICK_MATERIAL_DIGEST,
+  RISK_FLOOR_POLICY_VERSION
+} from "./uikit/confirmation-grant.js";
+export type { GrantInvalidReason, GrantVerificationContext } from "./uikit/confirmation-grant.js";
 export { AgentOrchestrator } from "./orchestration/executor.js";
 export { ModelContext, toModelSummary } from "./orchestration/model-context.js";
 export { Sculpt } from "./sculpt.js";
