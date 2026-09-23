@@ -14,3 +14,4 @@ export * from "./calibration.js";
 export * from "./cache.js";
 export * from "./runtime.js";
 export * from "./points/dp1-target.js";
+export * from "./points/dp7-risk.js";

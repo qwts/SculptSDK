@@ -191,6 +191,32 @@ export function buildCandidateSummaryDTO(
   };
 }
 
+/**
+ * DP-7's request DTO (#28), on the same builder framework as
+ * `CandidateSummaryDTO`: a redacted, allowlisted summary of the target the
+ * risk floor's `riskSignals` op read from — accessible name, visible text,
+ * and the form action (query/fragment stripped, same as `redactRoute`).
+ */
+export interface RiskSignalsDTO {
+  accessibleName?: string;
+  visibleText?: string;
+  formAction?: string;
+}
+
+export function buildRiskSignalsDTO(
+  signals: { accessibleName?: string; text?: string; formAction?: string },
+  redactor: Redactor,
+  options: { maxTextLength?: number } = {}
+): RiskSignalsDTO {
+  const maxLength = options.maxTextLength ?? 120;
+  const formActionPath = signals.formAction?.split("?")[0]?.split("#")[0];
+  return {
+    accessibleName: truncate(redactor.text(signals.accessibleName), maxLength),
+    visibleText: truncate(redactor.text(signals.text), maxLength),
+    formAction: truncate(redactor.text(formActionPath), maxLength)
+  };
+}
+
 /** Best-effort stringification that can never itself throw — a circular
  * object, a BigInt, or a throwing `toJSON`/`toString` must never turn a
  * sanitization step into an unhandled rejection. */

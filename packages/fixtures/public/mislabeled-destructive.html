@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Archive</title>
+    <style>
+      body { font-family: sans-serif; padding: 24px; }
+      .status { margin-top: 12px; font-weight: bold; }
+    </style>
+  </head>
+  <body>
+    <h1>Project items</h1>
+    <p>DP-7 semantic risk predicate fixture (#28): "Archive" matches none of the #26 deterministic floor's keywords, but permanently and irreversibly deletes the item — exactly the gap semantic evidence exists to catch.</p>
+
+    <button id="archive-btn" type="button">Archive</button>
+    <div class="status" id="status"></div>
+
+    <script>
+      document.getElementById("archive-btn").addEventListener("click", () => {
+        document.getElementById("status").textContent = "item permanently deleted";
+      });
+    </script>
+  </body>
+</html>

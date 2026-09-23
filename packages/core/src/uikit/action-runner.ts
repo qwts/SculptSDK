@@ -19,7 +19,8 @@ import type { FoundationLayer, KernelTarget, Resolution } from "../foundation/in
 import type { KernelClient } from "../foundation/kernel-client.js";
 import { SculptError, toSculptError } from "../errors.js";
 import type { SemanticRuntime } from "../semantic/runtime.js";
-import { checkRiskFloor, confirmationRequiredError, type RiskFloorSignals } from "./risk-floor.js";
+import { resolveRiskPredicates, DP7_POINT } from "../semantic/points/dp7-risk.js";
+import { checkRiskFloor, confirmationRequiredError, requiredRiskCheckUnavailableError, type RiskFloorSignals } from "./risk-floor.js";
 import {
   computeFormValuesDigest,
   confirmationGrantInvalidError,
@@ -264,21 +265,53 @@ export async function runAction(env: ActionEnv, spec: ActionSpec): Promise<Actio
       summary = resolution.summary;
       spec.onResolved?.(resolution);
 
-      // #26: the deterministic risk floor — click/submit only, no provider,
-      // nothing that could be gamed by a later answer. Checked before
-      // preconditions/dispatch. A match throws CONFIRMATION_REQUIRED unless
-      // options.confirmation carries a grant that verifies clean for this
-      // exact action/target/document/material state (#27) — either way the
-      // thrown error is non-retryable (see CODE_TRAITS), so the loop below
-      // breaks immediately rather than retrying past it.
+      // #26/#28: the risk gate — click/submit only. The deterministic floor
+      // runs first, no provider, nothing a later answer can clear. Only
+      // when it misses does DP-7's semantic risk check (#28) get a say, and
+      // only escalate-only: it can add a hit the floor didn't find, never
+      // remove one the floor did. Either kind of hit throws
+      // CONFIRMATION_REQUIRED unless options.confirmation carries a grant
+      // that verifies clean for this exact action/target/document/material
+      // state (#27) — the thrown error is always non-retryable (see
+      // CODE_TRAITS), so the loop below breaks immediately rather than
+      // retrying past it. Verified and consumed at most once per call
+      // (`riskGateCleared`, #27) — a retryable precondition failure on a
+      // later attempt must not re-check an already-consumed grant.
       if (!riskGateCleared && env.semantic.enabled && (spec.action === "click" || spec.action === "submit")) {
+        const actionType = spec.action as "click" | "submit";
         const signals = await env.kernel.call<RiskFloorSignals>("riskSignals", { target });
-        const matched = checkRiskFloor(signals);
+        let matched = checkRiskFloor(signals);
+
+        if (!matched && env.semantic.isPointEnabled(DP7_POINT)) {
+          const route = await env.foundation.observers.routeState();
+          const dp7 = await resolveRiskPredicates({
+            runtime: env.semantic,
+            origin: safeOrigin(route.url),
+            actionType,
+            signals,
+            intent: `${actionType} on ${summary.role ?? summary.kind ?? "element"} "${summary.name ?? ""}"`,
+            routePath: route.path,
+            documentEvidence: await env.foundation.observers.evidence(),
+            // Re-reads the target's own risk signals, not just document
+            // evidence — a digest recomputed from a stale snapshot could
+            // never detect the page's text/name/action changing under it
+            // without a navigation (#28 review finding).
+            checkFreshness: async () => ({
+              evidence: await env.foundation.observers.evidence(),
+              signals: await env.kernel.call<RiskFloorSignals>("riskSignals", { target })
+            })
+          });
+          // A required check that couldn't run is a hard stop: never
+          // routed through grant verification below — there is no
+          // approved risk decision for a grant to be bound to.
+          if (dp7.requiredButUnavailable) throw requiredRiskCheckUnavailableError(summary);
+          if (dp7.escalate) matched = "semantic-risk";
+        }
+
         if (matched) {
           const grant = options.confirmation;
           if (!grant) throw confirmationRequiredError(matched, summary);
 
-          const actionType = spec.action as "click" | "submit";
           const evidence = await env.foundation.observers.evidence();
           const route = await env.foundation.observers.routeState();
           const materialDigest =
