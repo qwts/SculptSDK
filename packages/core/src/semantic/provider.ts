@@ -105,6 +105,11 @@ export interface DecisionRequest {
   evidence: DecisionEvidence;
   questions: readonly SemanticQuestion[];
   coupledGroups?: readonly CoupledGroup[];
+  /** The already-redacted, allowlisted state accompanying the questions
+   * (§16) — e.g. `CandidateSummaryDTO[]` for a choice over candidates. Built
+   * through the DTO framework in `./redaction.js`; never raw snapshot state,
+   * never a form value. `evidence.redactedStateDigest` is this payload's digest. */
+  redactedState?: unknown;
 }
 
 /** What a provider actually returns, before validation. Untrusted input. */

@@ -9,4 +9,5 @@ export * from "./digest.js";
 export * from "./null-provider.js";
 export * from "./freshness.js";
 export * from "./budget.js";
+export * from "./redaction.js";
 export * from "./runtime.js";
