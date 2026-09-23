@@ -20,11 +20,15 @@ import { DEFAULT_ORCHESTRATION, UIRoot, type ActionEnv, type OrchestrationDefaul
 import { AgentOrchestrator } from "./orchestration/executor.js";
 import { ModelContext } from "./orchestration/model-context.js";
 import { KERNEL_SOURCE } from "./generated/kernel-source.js";
+import { SemanticRuntime, type SemanticAttachOptions } from "./semantic/runtime.js";
 
 export interface SculptAttachOptions {
   adapter: RuntimeAdapter;
   authority?: Partial<SculptControlSettings>;
   orchestration?: Partial<OrchestrationDefaults>;
+  /** @experimental Semantic Resolution Layer (m0 foundations). No effect
+   * unless `authority.semanticResolution` is `"enabled"` — see #14. */
+  semantic?: SemanticAttachOptions;
 }
 
 /**
@@ -71,7 +75,15 @@ export class Sculpt {
 
     const foundation = createFoundation({ kernel, adapter, capabilities, settings });
     const orchestration: OrchestrationDefaults = { ...DEFAULT_ORCHESTRATION, ...options.orchestration };
-    const env: ActionEnv = { kernel, foundation, capabilities, orchestration };
+    // Disabled parity (ADR-0004): SemanticRuntime itself swaps a passed
+    // provider for NullProvider and never touches it when disabled — this
+    // constructor call does no I/O and calls no method on options.semantic.provider.
+    const semantic = new SemanticRuntime({
+      settings,
+      provider: options.semantic?.provider,
+      budget: options.semantic?.budget
+    });
+    const env: ActionEnv = { kernel, foundation, capabilities, orchestration, semantic };
     return new Sculpt(adapter, settings, capabilities, kernel, foundation, env);
   }
 

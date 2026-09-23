@@ -17,6 +17,7 @@ import { serializeQuery } from "../types/queries.js";
 import type { FoundationLayer, KernelTarget, Resolution } from "../foundation/index.js";
 import type { KernelClient } from "../foundation/kernel-client.js";
 import { SculptError, toSculptError } from "../errors.js";
+import type { SemanticRuntime } from "../semantic/runtime.js";
 
 /**
  * Interaction contract engine (§18): every action runs preconditions,
@@ -46,6 +47,9 @@ export interface ActionEnv {
   foundation: FoundationLayer;
   capabilities: BrowserCapabilities;
   orchestration: OrchestrationDefaults;
+  /** @experimental Semantic Resolution Layer (m0 foundations). No production
+   * policy reaches through this in m0 — see #4/#14. */
+  semantic: SemanticRuntime;
 }
 
 export interface ActionSpec {

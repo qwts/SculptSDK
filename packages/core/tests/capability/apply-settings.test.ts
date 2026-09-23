@@ -34,7 +34,8 @@ const SETTING_VALUES: Record<keyof SculptControlSettings, string[]> = {
   storageInspection: ["disabled", "operator-controlled", "enabled"],
   sourceMapConsumption: ["disabled", "enabled"],
   actionLogging: ["disabled", "metadata", "full"],
-  rawJavaScript: ["disabled", "escape-hatch", "enabled"]
+  rawJavaScript: ["disabled", "escape-hatch", "enabled"],
+  semanticResolution: ["disabled", "enabled"]
 };
 
 describe("applySettings", () => {
