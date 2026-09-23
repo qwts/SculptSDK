@@ -118,6 +118,7 @@ export async function runSyntheticPolicy<TDegradation extends "recovery_or_advis
 
   const result = await runtime.evaluate({
     point: SYNTHETIC_POINT,
+    origin: options.origin,
     degradation,
     fallback: () => null,
     buildRequest: () => ({
